@@ -422,8 +422,6 @@ test_ask_user_escalation_format() {
     "ship rule 6 must require the same shape for a single finding"
   assert_grep "write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority)" "$brief" \
     "ship rule 6 must limit the verbatim axi slice to ask-user findings"
-  assert_grep "headed by one line stating this gate's review round number" "$brief" \
-    "ship rule 6 must have the worker state the review round number on each ask-user gate report"
   assert_grep "Whenever you append a status line at a no-mistakes gate, state that gate's review round number in the line's free text" "$brief" \
     "no-mistakes DOD must require a review round number on every gate status line"
   assert_grep "at the first gate whose review round reaches five or more, append one \`note [at=<epoch>]: review round <n>\` line even when that gate has no ask-user finding, once per run, and keep driving without waiting for a reply" "$brief" \
