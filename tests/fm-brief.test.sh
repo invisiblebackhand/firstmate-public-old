@@ -426,7 +426,7 @@ test_ask_user_escalation_format() {
     "ship rule 6 must have the worker state the review round number on each ask-user gate report"
   assert_grep "Whenever you append a status line at a no-mistakes gate, state that gate's review round number in the line's free text" "$brief" \
     "no-mistakes DOD must require a review round number on every gate status line"
-  assert_grep "at the first gate whose review round reaches five or more, append one \`working [at=<epoch>]: review round <n>\` line even when that gate has no ask-user finding, once per run, and keep driving without waiting for a reply" "$brief" \
+  assert_grep "at the first gate whose review round reaches five or more, append one \`note [at=<epoch>]: review round <n>\` line even when that gate has no ask-user finding, once per run, and keep driving without waiting for a reply" "$brief" \
     "no-mistakes DOD must surface a round-five-or-later auto-fix chain even without an ask-user finding"
   # shellcheck disable=SC2016  # single quotes are deliberate: backticks and the key/findings/file tokens must stay literal
   assert_grep 'needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file='"$home/data/$id/nm-<run>-findings.txt review round <number>" "$brief" \
