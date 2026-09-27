@@ -191,15 +191,14 @@ while [ $# -gt 0 ]; do
 done
 
 # ---- typed_resolution gate ------------------------------------------------------
-# A file that cannot be parsed as JSON falls through to the existing rules
-# validation, which reports the malformed file.
 TYPED_RESOLUTION=absent
 if [ -r "$RULES_PATH" ]; then
+  command -v jq >/dev/null 2>&1 || die "jq required"
   RULES=$(mktemp) || die "mktemp failed"
   trap 'rm -f "$RULES"' EXIT
   cp "$RULES_PATH" "$RULES" || die "could not snapshot rules file: $RULES_PATH"
   chmod 400 "$RULES" || die "could not protect rules snapshot"
-  TYPED_RESOLUTION=$(jq -r 'if has("typed_resolution") then "present:" + (.typed_resolution | tostring) else "absent" end' "$RULES" 2>/dev/null) || TYPED_RESOLUTION=present:on
+  TYPED_RESOLUTION=$(jq -er 'if has("typed_resolution") then "present:" + (.typed_resolution | tostring) else "absent" end' "$RULES" 2>/dev/null) || die "malformed rules file: $RULES_PATH (not JSON)"
 elif [ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ]; then
   die "rules file not readable: $RULES_PATH"
 fi
@@ -243,7 +242,6 @@ if ! fm_pr_task_id_valid "$TASK_LABEL"; then
   emit_error "could not derive task label from brief path"
 fi
 LEDGER_READY=1
-command -v jq >/dev/null 2>&1 || die "jq required"
 VERIFIED_HARNESSES=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
 
 # The fields this tool consumes must be well formed; bootstrap owns the wider
