@@ -74,6 +74,8 @@
 #   inspectable answer plus every candidate's evidence, in code.
 set -u
 
+export -n TYPESAFE_API_KEY TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-$FM_ROOT}"

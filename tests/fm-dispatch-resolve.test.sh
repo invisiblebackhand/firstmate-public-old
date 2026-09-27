@@ -178,6 +178,19 @@ cat "${QUOTA_AXI_FIXTURE:?}"
 SH
 chmod +x "$FAKEBIN/quota-axi"
 
+REAL_JQ=$(command -v jq)
+export REAL_JQ
+cat > "$FAKEBIN/jq" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ]; then
+  printf 'jq:secret-present\n' >> "${CHILD_ENV_LOG:?}"
+else
+  printf 'jq:clean\n' >> "${CHILD_ENV_LOG:?}"
+fi
+exec "$REAL_JQ" "$@"
+SH
+chmod +x "$FAKEBIN/jq"
+
 RESPONSE="$TMP_ROOT/response.json"
 export FAKE_CURL_LOG="$LOG" FAKE_CURL_RESPONSE="$RESPONSE" QUOTA_AXI_CALLS="$LOG/quota-axi.calls" QUOTA_AXI_FIXTURE="$QUOTA" CHILD_ENV_LOG="$LOG/child-env"
 
@@ -272,6 +285,8 @@ assert_equals 'dispatch-resolve: off (typed_resolution is off in config/crew-dis
 assert_absent "$LOG/argv" "typed_resolution off never calls curl, even with a key present"
 assert_absent "$LOG/quota-axi.calls" "typed_resolution off never reads quota-axi"
 assert_absent "$HOME_DIR/state/jev-usage.jsonl" "typed_resolution off never touches the resolver ledger"
+assert_contains "$(cat "$LOG/child-env")" 'jq:clean' "typed_resolution off keeps the key out of config-reader children"
+assert_not_contains "$(cat "$LOG/child-env")" 'secret-present' "typed_resolution off leaks no key to children"
 
 cp "$BASE_RULES" "$RULES"
 reset_log
@@ -292,6 +307,8 @@ assert_equals 'dispatch-resolve: off (typed_resolution absent from config/crew-d
 assert_absent "$LOG/argv" "absent typed_resolution never calls curl, even with a key present"
 assert_absent "$LOG/quota-axi.calls" "absent typed_resolution never reads quota-axi"
 assert_absent "$HOME_DIR/state/jev-usage.jsonl" "absent typed_resolution never touches the resolver ledger"
+assert_contains "$(cat "$LOG/child-env")" 'jq:clean' "absent typed_resolution keeps the key out of config-reader children"
+assert_not_contains "$(cat "$LOG/child-env")" 'secret-present' "absent typed_resolution leaks no key to children"
 cp "$BASE_RULES" "$RULES"
 pass "typed resolution is off by default; explicit on reaches the stub"
 
@@ -315,7 +332,10 @@ assert_contains "$argv" 'https://api.typesafe.ai/v1/systemone' "the request uses
 assert_contains "$argv" $'--max-time\n5' "the request uses the fixed five-second timeout"
 assert_contains "$argv" '@/dev/fd/3' "the header is read from a file descriptor"
 assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "curl receives the bearer header on fd 3"
-assert_equals $'curl:clean\nquota-axi:clean' "$(cat "$LOG/child-env")" "the API key is absent from every child environment"
+assert_contains "$(cat "$LOG/child-env")" 'jq:clean' "the config reader does not inherit the API key"
+assert_contains "$(cat "$LOG/child-env")" 'curl:clean' "curl does not inherit the API key"
+assert_contains "$(cat "$LOG/child-env")" 'quota-axi:clean' "quota-axi does not inherit the API key"
+assert_not_contains "$(cat "$LOG/child-env")" 'secret-present' "the API key is absent from every child environment"
 body=$(cat "$LOG/body")
 assert_equals 'jev-1.13.0' "$(jq -r .model <<<"$body")" "default model is pinned to the verified Jev release"
 assert_equals 'pager' "$(jq -r .state.task.project <<<"$body")" "project rides in the state"
