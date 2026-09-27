@@ -15,7 +15,8 @@
 #           and then takes exactly the `note` path.
 #   status  Answer "what is happening" from durable records ONLY. Reads no
 #           network and appends NO wake, so it never interrupts work and is safe
-#           to run in a loop.
+#           to run in a loop. Shows every in-flight backlog item, capping each
+#           displayed line independently at 150 UTF-8 characters.
 #   ask     Answer a side question with a one-shot model call that never touches
 #           firstmate, the backlog, or the wake queue. A side question is not
 #           fleet work and must not become fleet work.
