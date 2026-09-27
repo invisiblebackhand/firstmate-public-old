@@ -546,7 +546,8 @@ Use compatible `tasks-axi` when the configured backend selects it, always throug
 
 Keep free-form notes free of temporary paths, moving versions, ephemeral identifiers, and copied state that will rot.
 Inspect the current task note before replacing its considered body, and archive the superseded body when recoverability matters rather than appending by default.
-Verify volatile details against their authoritative config, live system, or API before acting, and correct or delete stale prose immediately.
+Verify volatile details against their authoritative config, live system, or API before acting, and correct or delete stale prose immediately: trace a false or stale claim to its source, search its likely live consumers including paraphrases across every home's `data/`, this repo's tracked docs, skills and scripts, and the affected project's `AGENTS.md`, fix each through its own owner's normal path, tell any active worker known to have loaded it through its steering inbox, and leave historical reports, transcripts and receipts as they are with a supersession pointer where they are likely to be re-read.
+Record a local lesson's scope and the evidence it rests on before promoting it fleet-wide.
 Preserve durable structured identifiers, dependencies, and completion artifact links, and route reusable knowledge to section 6 rather than scattering it through task notes.
 
 ## 11. Crewmate briefs
@@ -579,7 +580,7 @@ These skills are not captain-invocable; load them only at their precise triggers
 
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `PRESENTATION_UNAVAILABLE:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `FLEET_SYNC:`, `NETWORK_CHECKS:`, `HOME_SUMMARY:`, `BACKLOG_RECONCILE:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`), or when `BOOTSTRAP_INFO:` says an interrupted backlog cleanup may have left an endpoint or local copy; silence and other `BOOTSTRAP_INFO:` facts need no load.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
-- `ask-user-authority` - load before deciding any ask-user finding.
+- `ask-user-authority` - load before deciding any ask-user finding, before a no-mistakes run's fifth review round, before approving a follow-up that extends an earlier ask, and before a consequential steer.
 - `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array from current quota-axi default TOON.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.

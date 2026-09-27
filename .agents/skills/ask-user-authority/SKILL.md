@@ -1,8 +1,8 @@
 ---
 name: ask-user-authority
 description: >-
-  Agent-only decision procedure for ask-user findings.
-  Use before deciding any ask-user finding.
+  Agent-only decision procedure for ask-user findings and for the decision-point re-read at a no-mistakes run's fifth review round, a follow-up that extends an earlier ask, and a consequential steer.
+  Use before deciding any ask-user finding, and at those same three decision points.
   This skill is the single owner of finding-decision policy: firstmate always applies judgment, decides findings that are unambiguous toward accepted intent, and escalates only genuinely ambiguous, expanding, or destructive ones.
   Finding authority is this skill's criteria, not the project's yolo posture.
 user-invocable: false
@@ -47,6 +47,12 @@ State all five of these elements in one concise, evidence-first escalation:
 5. A recommendation with the reason it best serves the accepted intent.
 
 Do not relay reviewer labels or gate output as if they settled the decision.
+
+## Decision-point re-read
+
+At three points, re-read the brief's `## Captain's intent` and the changes accepted so far, and set the worker's evidence and the smallest compliant alternative beside it as in Captain-facing escalation above, even when the answer is not to escalate: a no-mistakes run's fifth review round, approving a follow-up that extends an earlier ask, and a consequential steer.
+At the fifth review round, classify the outstanding findings as independent defects, regressions introduced by earlier fixes, repeated or disputed claims, missing context, or scope expansion, then decide by the criteria in Decide above: fix regressions and in-scope defects, escalate expansion, ambiguity, or a questionable abstraction, and weigh simplifying, reverting, or rescoping alongside continuing.
+Do this once per episode, revisited only after a material change, so it never re-escalates the same settled state, waives a finding, or adds an approver or gate beyond the criteria above.
 
 ## Classification examples
 

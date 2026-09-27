@@ -239,8 +239,8 @@ fm_ask_user_escalation_block() {  # <data-dir> <task-id>
   local data=$1 id=$2
   cat <<EOF
    For a no-mistakes ask-user gate specifically, escalate all ask-user findings as one event plus one snapshot file, using that same shape even when the gate holds only a single ask-user finding: write only the ask-user findings, verbatim and unparaphrased (id, severity, file, line, description, authority), to \`$data/$id/nm-<run>-findings.txt\`, then report the gate with
-   \`needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file=$data/$id/nm-<run>-findings.txt\`
-   naming every ask-user finding id from that gate. The status line only points at the file; it never restates or summarizes a finding's content.
+   \`needs-decision [at=<epoch>] [key=nm-<run>-<step>]: ask-user findings=<id1>,<id2>,... file=$data/$id/nm-<run>-findings.txt review round <number>\`
+   naming every ask-user finding id from that gate. The status line points at the file and states the review round; it never restates or summarizes a finding's content.
 EOF
 }
 
@@ -281,6 +281,7 @@ When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the 
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 
 You drive no-mistakes by responding to its gates, not by implementing fixes.
+Whenever you append a status line at a no-mistakes gate, state that gate's review round number in the line's free text, preserving the required status verb, timestamp, and any \`[key=...]\` field; at the first gate whose review round reaches five or more, append one \`note [at=<epoch>]: review round <n>\` line even when that gate has no ask-user finding, once per run, and keep driving without waiting for a reply.
 Follow the guidance no-mistakes itself provides for the mechanics: it loads when you invoke /no-mistakes, and \`no-mistakes axi run --help\` plus the \`help\` lines in each \`axi\` response are authoritative and version-matched to the installed binary.
 When starting no-mistakes, pass \`--intent\` as only this brief's \`## Captain's intent\` subsection body, not its heading, plus any later words the captain actually said.
 Preserve the actual words without adding speaker labels or direct address; the subsection heading supplies provenance outside the pipeline input.
