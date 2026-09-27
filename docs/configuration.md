@@ -1022,7 +1022,7 @@ This section is the single owner of the canonical schema and its per-field seman
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
-| Top-level `typed_resolution` | Optional `"on"`/`"off"` fleet-wide switch owned by [Typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key). |
+| Top-level `typed_resolution` | Optional `"on"`/`"off"` switch owned by [Typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key); absent means off. |
 
 **Fields applied only by typed resolution**
 
@@ -1090,16 +1090,20 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 
 `bin/fm-dispatch-resolve.sh` resolves one concrete crewmate or scout profile from a written brief with typesafe.ai's System One model (Jev), so the rule match that firstmate otherwise reasons out in its own context becomes one short tool turn.
-It is off unless `TYPESAFE_API_KEY` is non-empty in the calling environment or the home's gitignored `.env` holds a `TYPESAFE_API_KEY=` line; the environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
+It is off by default.
+Only an explicit `"typed_resolution": "on"` in the effective home's `config/crew-dispatch.json` enables the key gate; then `TYPESAFE_API_KEY` must be non-empty in the calling environment or the home's gitignored `.env` must hold a `TYPESAFE_API_KEY=` line.
+The environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
 
-**Fleet-wide off switch**
+**Typed resolution switch**
 
-A top-level `"typed_resolution": "off"` in `config/crew-dispatch.json` turns the tool off before any key is read (environment or `.env`) or any brief content is prepared: one `dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)` line on stderr, nothing on stdout, exit 0, and no network call, matching the key-absent off contract above exactly.
-Absent or `"on"` keeps today's behavior; any other value is an actionable exit 2 configuration error, reported the same way as a malformed rules file.
-Since every secondmate home inherits this file from the primary, one edit to the main home's `config/crew-dispatch.json` turns resolution off fleet-wide, and removing the field turns it back on; no key is read, moved, or deleted to switch it.
+An absent `typed_resolution` field or explicit `"off"` turns the tool off before any key is read (environment or `.env`) or brief content is prepared: one `dispatch-resolve: off` line naming the reason on stderr, nothing on stdout, exit 0, and no network call.
+An explicit `"on"` with a present key runs the existing resolution path; any other field value is an actionable exit 2 configuration error.
+The off default takes effect in each home when that home runs the updated code.
+To re-enable resolution, set `"typed_resolution": "on"` in the main home's `config/crew-dispatch.json`; secondmate homes receive that setting through config propagation.
+No key needs to be moved or deleted to switch it.
 `bin/fm-bootstrap.sh` validates the field alongside the rest of this file.
 
 Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFIG_OVERRIDE` selects the config directory for tests and specialized setup like the other scripts.
@@ -2345,7 +2349,7 @@ FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainl
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
 FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/x-outbox/ without posting or requiring a token
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
-TYPESAFE_API_KEY=       # TypeSafe/Jev opt-in, from the environment or .env; absent leaves dispatch resolution off and Jev monitoring inert (docs/configuration.md "Typed dispatch resolution" and "Jev monitoring")
+TYPESAFE_API_KEY=       # TypeSafe/Jev key from the environment or .env; dispatch resolution also requires typed_resolution on, while Jev monitoring uses the key alone (docs/configuration.md "Typed dispatch resolution" and "Jev monitoring")
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting Relay completion follow-ups (7 days)

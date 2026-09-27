@@ -5,15 +5,13 @@
 # Usage:
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>]
 #
-# typed_resolution gate: a top-level "typed_resolution": "off" in
-#   config/crew-dispatch.json turns this whole tool off fleet-wide, checked
-#   before the opt-in gate below so an operator-forced off never reads
-#   TYPESAFE_API_KEY or .env: one "dispatch-resolve: off (typed_resolution is
-#   off in config/crew-dispatch.json)" line on stderr, nothing on stdout,
-#   exit 0, no network call. Absent or "on" keeps today's behavior; any other
-#   value is an actionable exit 2 configuration error, like malformed rules.
-#   One edit to the main home's config/crew-dispatch.json flips every
-#   inheriting home at once, and removing the field turns it back on.
+# typed_resolution gate: resolution is off when config/crew-dispatch.json
+#   omits the field or sets it to "off". This gate runs before key access or
+#   brief preparation: one "dispatch-resolve: off" line naming the reason on
+#   stderr, nothing on stdout, exit 0, no network call. Only an explicit
+#   "on" proceeds to the key gate. Any other value is an exit 2 config error.
+#   Each home takes this default when it runs the updated code. Set "on" in
+#   the main home's config to re-enable after propagation to secondmate homes.
 #
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
 #   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
@@ -75,10 +73,6 @@
 #   the captain-approval gate, or fm-spawn.sh validation; it publishes one
 #   inspectable answer plus every candidate's evidence, in code.
 set -u
-
-TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
-export -n TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
-unset TYPESAFE_API_KEY
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -195,17 +189,21 @@ while [ $# -gt 0 ]; do
 done
 
 # ---- typed_resolution gate ------------------------------------------------------
-# Checked before any key is read (env or .env) or brief content is prepared, so
-# an operator-forced off never touches TYPESAFE_API_KEY or .env. A file that
-# cannot even be parsed as JSON falls through to "on" here; the rules
-# validation below still reports it as a malformed rules file.
-TYPED_RESOLUTION=on
+# A file that cannot be parsed as JSON falls through to the existing rules
+# validation, which reports the malformed file.
+TYPED_RESOLUTION=absent
 if [ -r "$RULES_PATH" ]; then
-  TYPED_RESOLUTION=$(jq -r 'if has("typed_resolution") then .typed_resolution else "on" end' "$RULES_PATH" 2>/dev/null) || TYPED_RESOLUTION=on
+  TYPED_RESOLUTION=$(jq -r 'if has("typed_resolution") then "present:" + (.typed_resolution | tostring) else "absent" end' "$RULES_PATH" 2>/dev/null) || TYPED_RESOLUTION=present:on
+elif [ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ]; then
+  die "rules file not readable: $RULES_PATH"
 fi
 case "$TYPED_RESOLUTION" in
-  on) : ;;
-  off)
+  present:on) : ;;
+  absent)
+    echo "dispatch-resolve: off (typed_resolution absent from config/crew-dispatch.json)" >&2
+    exit 0
+    ;;
+  present:off)
     echo "dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)" >&2
     exit 0
     ;;
@@ -213,6 +211,9 @@ case "$TYPED_RESOLUTION" in
 esac
 
 # ---- opt-in gate ---------------------------------------------------------------
+TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
+export -n TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
+unset TYPESAFE_API_KEY
 if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
   TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
 fi
