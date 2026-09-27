@@ -1100,6 +1100,7 @@ crew_dispatch_validate() {
       | map("\(.h):\(.e)")
       | unique;
     if type != "object" then "top-level value must be an object"
+    elif has("typed_resolution") and ((.typed_resolution | type) != "string" or (.typed_resolution != "on" and .typed_resolution != "off")) then "typed_resolution must be \"on\" or \"off\" when present"
     elif has("rules") and (.rules | type) != "array" then "rules must be an array"
     elif [(.rules // [])[]? | select(type != "object")] | length > 0 then "each rule must be an object"
     elif [(.rules // [])[]? | select((.when? | type) != "string" or (.when | length) == 0)] | length > 0 then "each rule needs non-empty when"

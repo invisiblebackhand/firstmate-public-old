@@ -5,6 +5,16 @@
 # Usage:
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>]
 #
+# typed_resolution gate: a top-level "typed_resolution": "off" in
+#   config/crew-dispatch.json turns this whole tool off fleet-wide, checked
+#   before the opt-in gate below so an operator-forced off never reads
+#   TYPESAFE_API_KEY or .env: one "dispatch-resolve: off (typed_resolution is
+#   off in config/crew-dispatch.json)" line on stderr, nothing on stdout,
+#   exit 0, no network call. Absent or "on" keeps today's behavior; any other
+#   value is an actionable exit 2 configuration error, like malformed rules.
+#   One edit to the main home's config/crew-dispatch.json flips every
+#   inheriting home at once, and removing the field turns it back on.
+#
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
 #   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
 #   accessor as FMX_PAIRING_TOKEN (bin/fm-env-lib.sh). The environment wins.
@@ -183,6 +193,24 @@ while [ $# -gt 0 ]; do
     *) [ -z "$BRIEF" ] || die "one brief file only"; BRIEF=$1; shift ;;
   esac
 done
+
+# ---- typed_resolution gate ------------------------------------------------------
+# Checked before any key is read (env or .env) or brief content is prepared, so
+# an operator-forced off never touches TYPESAFE_API_KEY or .env. A file that
+# cannot even be parsed as JSON falls through to "on" here; the rules
+# validation below still reports it as a malformed rules file.
+TYPED_RESOLUTION=on
+if [ -r "$RULES_PATH" ]; then
+  TYPED_RESOLUTION=$(jq -r 'if has("typed_resolution") then .typed_resolution else "on" end' "$RULES_PATH" 2>/dev/null) || TYPED_RESOLUTION=on
+fi
+case "$TYPED_RESOLUTION" in
+  on) : ;;
+  off)
+    echo "dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)" >&2
+    exit 0
+    ;;
+  *) die "malformed rules file: $RULES_PATH - typed_resolution must be \"on\" or \"off\" when present" ;;
+esac
 
 # ---- opt-in gate ---------------------------------------------------------------
 if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then

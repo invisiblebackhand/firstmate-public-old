@@ -260,6 +260,39 @@ TYPESAFE_API_KEY=$KEY FM_CONFIG_OVERRIDE="$OVERRIDE_CONFIG" run code out err "$B
 assert_contains "$out" '  status: clear' "FM_CONFIG_OVERRIDE selects the canonical rules directory"
 pass "TYPESAFE_API_KEY= in .env activates the tool; environment and config overrides work"
 
+# --- typed_resolution gate: fleet-wide off switch in config/crew-dispatch.json ---
+TYPED_OFF_RULES="$TMP_ROOT/typed-off-rules.json"
+jq '. + {typed_resolution: "off"}' "$BASE_RULES" > "$TYPED_OFF_RULES"
+cp "$TYPED_OFF_RULES" "$RULES"
+rm -f "$HOME_DIR/state/jev-usage.jsonl"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "typed_resolution off exits 0"
+assert_equals '' "$out" "typed_resolution off prints nothing on stdout"
+assert_equals 'dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)' "$err" "typed_resolution off names itself on stderr"
+assert_absent "$LOG/argv" "typed_resolution off never calls curl, even with a key present"
+assert_absent "$LOG/quota-axi.calls" "typed_resolution off never reads quota-axi"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "typed_resolution off never touches the resolver ledger"
+
+TYPED_ON_RULES="$TMP_ROOT/typed-on-rules.json"
+jq '. + {typed_resolution: "on"}' "$BASE_RULES" > "$TYPED_ON_RULES"
+cp "$TYPED_ON_RULES" "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "typed_resolution on exits 0"
+assert_contains "$out" '  status: clear' "typed_resolution on runs the normal path"
+assert_contains "$(cat "$LOG/argv")" 'https://api.typesafe.ai/v1/systemone' "typed_resolution on still reaches the stub"
+
+cp "$BASE_RULES" "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "absent typed_resolution exits 0"
+assert_contains "$out" '  status: clear' "an absent typed_resolution field runs the normal path"
+assert_contains "$(cat "$LOG/argv")" 'https://api.typesafe.ai/v1/systemone' "an absent typed_resolution field still reaches the stub"
+pass "typed_resolution off is checked before any key is read; on and absent keep today's behavior"
+
 # --- clear: request shape, secret handling, argmax --------------------------
 reset_log
 rm -f "$HOME_DIR/state/jev-usage.jsonl"
@@ -1151,7 +1184,8 @@ for bad in \
   '{"rules":[{"when":"x","use":{"harness":"grok","effort":"max"}}]}|each use profile effort must be supported by its harness and model' \
   '{"rules":[{"when":"x","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5"}}]}|use profiles whose harness lacks one authoritative provider family require provider: opencode' \
   '{"rules":[{"when":"x","use":{"harness":"rovo"}}]}|use profiles whose harness lacks one authoritative provider family require provider: rovo' \
-  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"pi","model":"anthropic/claude-sonnet-5"}}|default profiles whose harness lacks one authoritative provider family require provider: pi'; do
+  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"pi","model":"anthropic/claude-sonnet-5"}}|default profiles whose harness lacks one authoritative provider family require provider: pi' \
+  '{"typed_resolution":"maybe"}|typed_resolution must be "on" or "off" when present'; do
   printf '%s\n' "${bad%%|*}" > "$RULES"
   TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
   expect_code 2 "$code" "malformed rules exit 2: ${bad#*|}"

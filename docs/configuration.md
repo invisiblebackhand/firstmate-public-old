@@ -1022,6 +1022,7 @@ This section is the single owner of the canonical schema and its per-field seman
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
+| Top-level `typed_resolution` | Optional `"on"`/`"off"` fleet-wide switch owned by [Typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key). |
 
 **Fields applied only by typed resolution**
 
@@ -1093,6 +1094,13 @@ It is off unless `TYPESAFE_API_KEY` is non-empty in the calling environment or t
 
 Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
+
+**Fleet-wide off switch**
+
+A top-level `"typed_resolution": "off"` in `config/crew-dispatch.json` turns the tool off before any key is read (environment or `.env`) or any brief content is prepared: one `dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)` line on stderr, nothing on stdout, exit 0, and no network call, matching the key-absent off contract above exactly.
+Absent or `"on"` keeps today's behavior; any other value is an actionable exit 2 configuration error, reported the same way as a malformed rules file.
+Since every secondmate home inherits this file from the primary, one edit to the main home's `config/crew-dispatch.json` turns resolution off fleet-wide, and removing the field turns it back on; no key is read, moved, or deleted to switch it.
+`bin/fm-bootstrap.sh` validates the field alongside the rest of this file.
 
 Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFIG_OVERRIDE` selects the config directory for tests and specialized setup like the other scripts.
 
