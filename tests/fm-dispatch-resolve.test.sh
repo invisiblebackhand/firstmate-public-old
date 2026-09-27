@@ -178,6 +178,22 @@ cat "${QUOTA_AXI_FIXTURE:?}"
 SH
 chmod +x "$FAKEBIN/quota-axi"
 
+REAL_CP=$(command -v cp)
+export REAL_CP
+cat > "$FAKEBIN/cp" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ]; then
+  printf 'cp:secret-present\n' >> "${CHILD_ENV_LOG:?}"
+else
+  printf 'cp:clean\n' >> "${CHILD_ENV_LOG:?}"
+fi
+if [ -n "${FAKE_RULES_REPLACEMENT_SOURCE:-}" ] && [ "$1" = "${FAKE_RULES_PATH:-}" ]; then
+  mv "$FAKE_RULES_REPLACEMENT_SOURCE" "$FAKE_RULES_PATH"
+fi
+exec "$REAL_CP" "$@"
+SH
+chmod +x "$FAKEBIN/cp"
+
 REAL_JQ=$(command -v jq)
 export REAL_JQ
 cat > "$FAKEBIN/jq" <<'SH'
@@ -311,6 +327,21 @@ assert_contains "$(cat "$LOG/child-env")" 'jq:clean' "absent typed_resolution ke
 assert_not_contains "$(cat "$LOG/child-env")" 'secret-present' "absent typed_resolution leaks no key to children"
 cp "$BASE_RULES" "$RULES"
 pass "typed resolution is off by default; explicit on reaches the stub"
+
+REPLACEMENT_RULES="$TMP_ROOT/replacement-rules.json"
+jq '.typed_resolution = "off"' "$BASE_RULES" > "$REPLACEMENT_RULES"
+rm -f "$HOME_DIR/state/jev-usage.jsonl"
+reset_log
+TYPESAFE_API_KEY=$KEY FAKE_RULES_PATH="$RULES" FAKE_RULES_REPLACEMENT_SOURCE="$REPLACEMENT_RULES" run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "a replacement with typed_resolution off exits 0"
+assert_equals '' "$out" "a replacement with typed_resolution off prints nothing on stdout"
+assert_equals 'dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)' "$err" "a replacement with typed_resolution off names itself"
+assert_absent "$LOG/argv" "a replacement with typed_resolution off never calls curl"
+assert_absent "$LOG/quota-axi.calls" "a replacement with typed_resolution off never reads quota-axi"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "a replacement with typed_resolution off never touches the resolver ledger"
+assert_equals 'off' "$(jq -r '.typed_resolution' "$RULES")" "the replacement reached the canonical rules path"
+cp "$BASE_RULES" "$RULES"
+pass "the switch and request use one rules snapshot"
 
 # --- clear: request shape, secret handling, argmax --------------------------
 reset_log

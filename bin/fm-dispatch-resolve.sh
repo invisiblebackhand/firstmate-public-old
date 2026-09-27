@@ -195,7 +195,11 @@ done
 # validation, which reports the malformed file.
 TYPED_RESOLUTION=absent
 if [ -r "$RULES_PATH" ]; then
-  TYPED_RESOLUTION=$(jq -r 'if has("typed_resolution") then "present:" + (.typed_resolution | tostring) else "absent" end' "$RULES_PATH" 2>/dev/null) || TYPED_RESOLUTION=present:on
+  RULES=$(mktemp) || die "mktemp failed"
+  trap 'rm -f "$RULES"' EXIT
+  cp "$RULES_PATH" "$RULES" || die "could not snapshot rules file: $RULES_PATH"
+  chmod 400 "$RULES" || die "could not protect rules snapshot"
+  TYPED_RESOLUTION=$(jq -r 'if has("typed_resolution") then "present:" + (.typed_resolution | tostring) else "absent" end' "$RULES" 2>/dev/null) || TYPED_RESOLUTION=present:on
 elif [ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ]; then
   die "rules file not readable: $RULES_PATH"
 fi
@@ -240,12 +244,6 @@ if ! fm_pr_task_id_valid "$TASK_LABEL"; then
 fi
 LEDGER_READY=1
 command -v jq >/dev/null 2>&1 || die "jq required"
-[ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ] || no_rules
-[ -r "$RULES_PATH" ] || die "rules file not readable: $RULES_PATH"
-RULES=$(mktemp) || die "mktemp failed"
-trap 'rm -f "$RULES"' EXIT
-cp "$RULES_PATH" "$RULES" || die "could not snapshot rules file: $RULES_PATH"
-chmod 400 "$RULES" || die "could not protect rules snapshot"
 VERIFIED_HARNESSES=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
 
 # The fields this tool consumes must be well formed; bootstrap owns the wider
