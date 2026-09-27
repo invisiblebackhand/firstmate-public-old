@@ -641,13 +641,62 @@ test_pi_footer_carveout_does_not_loosen_dead_shell_rule() {
   # bare `$` sits where its footer used to be) must still refuse, and a
   # dollar-leading row that does not match the footer's full structural shape
   # must still count as staleness evidence, never treated as pi's furniture.
-  local pi_idle stale near_miss
+  local pi_idle stale
   pi_idle=$(printf 'pi\tidle')
   stale=$'transcript\n────────────────────────\n\n────────────────────────\nprocess exited\n$'
   assert_screen "a real dead shell below a stale pi pair still refuses" unknown "$CAPS_STYLED" "$stale" '' "$pi_idle"
-  near_miss=$'transcript\n────────────────────────\n\n────────────────────────\n$0.000 typed at a real prompt'
-  assert_screen "a dollar row without the footer's full shape still counts as a dead shell" unknown "$CAPS_STYLED" "$near_miss" '' "$pi_idle"
   pass "fm_composer_classify_screen: the pi footer carve-out never loosens the dead-shell staleness rule"
+}
+
+test_matrix_pi_dollar_status_footer_is_empty() {
+  # Pi's status row `$0.000 (sub) 5.4%/272k (auto)` at column 0 used to read
+  # as a dead-shell prompt, so an idle separated composer classified unknown.
+  # A counters-first footer never took that path. A real `$` or `$ ls` prompt,
+  # and the same cost string typed between the separators, still refuse.
+  local dollar typed dead_shell dead_cmd spaced footer_only inside wrap dollar_status
+  local pi_idle pi_working none out
+  pi_idle=$(printf 'pi\tidle'); pi_working=$(printf 'pi\tworking'); none=$(printf 'zsh\t')
+  dollar_status=$'$0.000 (sub) 5.4%/272k (auto)'
+  dollar=$'transcript\n────────────────────────\n\n────────────────────────\n'"$dollar_status"
+
+  assert_screen "pi dollar-first status on herdr" empty "$CAPS_STYLED" "$dollar" '' "$pi_idle"
+  assert_screen "pi dollar-first status on tmux" empty "$CAPS_TMUX" "$dollar" 2 "$pi_idle"
+
+  [ "$(fm_composer_classify_screen "$CAPS_STYLED" "$dollar")" = need-identity ] \
+    || fail "a dollar-first Pi footer must still request the lazy identity probe"
+  assert_screen "dollar-first status without identity capability" unknown "$CAPS_PLAIN" "$dollar"
+  assert_screen "working pi with dollar-first status defers" unknown \
+    "$CAPS_STYLED" "$dollar" '' "$pi_working"
+  assert_screen "non-pi identity with dollar-first status defers" unknown \
+    "$CAPS_STYLED" "$dollar" '' "$none"
+
+  typed=$'────────────────────────\nfix the flaky test\n────────────────────────\n'"$dollar_status"
+  assert_screen "pi typed text above dollar-first status" pending \
+    "$CAPS_STYLED" "$typed" '' "$pi_idle"
+  inside=$'────────────────────────\n'"$dollar_status"$'\n────────────────────────'
+  assert_screen "dollar-first string typed into the pi composer" pending \
+    "$CAPS_STYLED" "$inside" '' "$pi_idle"
+
+  dead_shell=$'transcript\n────────────────────────\n\n────────────────────────\n$'
+  dead_cmd=$'transcript\n────────────────────────\n\n────────────────────────\n$ ls -la'
+  spaced=$'transcript\n────────────────────────\n\n────────────────────────\n$ 0.000 (sub)'
+  assert_screen "real dead shell below a pi pair" unknown "$CAPS_STYLED" "$dead_shell" '' "$pi_idle"
+  assert_screen "dead-shell command below a pi pair" unknown "$CAPS_STYLED" "$dead_cmd" '' "$pi_idle"
+  assert_screen "spaced dollar below a pi pair" unknown "$CAPS_STYLED" "$spaced" '' "$pi_idle"
+
+  footer_only=$'transcript\n'"$dollar_status"
+  assert_screen "dollar-first status with no pi pair" unknown \
+    "$CAPS_STYLED" "$footer_only" '' "$pi_idle"
+
+  wrap=$'❯\n$ ls -la'
+  out=$(fm_composer_classify_screen "$CAPS_STYLED" "$wrap")
+  [ "$out" = unknown ] \
+    || fail "a real dead shell below a bare glyph must still invalidate cursorless selection, got '$out'"
+  wrap=$'❯\n$ '
+  out=$(fm_composer_classify_screen "$CAPS_STYLED" "$wrap")
+  [ "$out" = unknown ] \
+    || fail "a bare dollar prompt below a glyph must still invalidate cursorless selection, got '$out'"
+  pass "matrix: a dollar-first pi status footer reads empty; dead shells still refuse"
 }
 
 test_matrix_opencode_leftbar_signals() {
@@ -961,6 +1010,7 @@ test_matrix_codex_idle_starfield_furniture
 test_matrix_pi_separated_needs_identity
 test_matrix_pi_footer_furniture_not_dead_shell
 test_pi_footer_carveout_does_not_loosen_dead_shell_rule
+test_matrix_pi_dollar_status_footer_is_empty
 test_matrix_opencode_leftbar_signals
 test_matrix_grok_titled_bottom_border
 test_matrix_kimi_bordered_shell_glyph_box

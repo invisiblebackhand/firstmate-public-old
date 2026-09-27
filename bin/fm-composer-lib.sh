@@ -120,8 +120,11 @@
 # what a pane shows once its agent has exited to a plain login shell - is a
 # genuine empty agent composer ONLY inside a bordered container. On a bare row
 # it is a dead-shell prompt and classifies `unknown` (never a safe injection
-# target). The AGENT glyphs `❯` (claude), `›` (codex), `⟩` (U+27E9, muse),
-# and `→` (U+2192, cursor) are a genuine empty agent composer either way.
+# target). A `$` followed immediately by a digit is Pi's cost footer, not this
+# prompt (`FM_COMPOSER_PI_STATUS_RE_DEFAULT`).
+# The AGENT glyphs `❯` (claude), `›` (codex), `⟩` (U+27E9, muse),
+# `→` (U+2192, cursor), and `❭` (U+276D, devin) are a genuine empty agent
+# composer either way.
 # Both glyph sets are declared
 # exactly once below; every decision reaches them through the declarations.
 #
@@ -348,7 +351,8 @@ fm_composer_strip_ghost() {
 # Matching a footer to confirm a keystroke landed is a different question from
 # asking what a worker is doing, and the two must not be conflated.
 # Delivery-only rendered busy footers per harness. claude/codex: "esc to
-# interrupt"; opencode: "esc interrupt"; pi: "Working..."; omp: "Working…"; grok: "Ctrl+c:cancel"; agy: "esc to cancel".
+# interrupt"; opencode: "esc interrupt"; pi: "Working..."; omp: "Working…"; grok: "Ctrl+c:cancel"; agy: "esc to cancel";
+# devin: "esc twice to interrupt" and its "❭ Guide Devin while it works" working composer.
 # Claude's current spinner has a rotating glyph and word, but every active-turn
 # line has an ellipsis followed by a parenthesized elapsed duration. Keep this
 # signature separate from the shared default because that shape is not generic
@@ -373,8 +377,11 @@ fm_composer_strip_ghost() {
 # tmux agy endpoint reaches the submit core with no recorded harness, and its
 # bare `>` composer verdict is `unknown`, so the busy footer is the only
 # turn-started acknowledgement that path can read.
-FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel'
+FM_DELIVERY_BUSY_REGEX_DEFAULT='esc (to )?interrupt|Working(\.\.\.|…)|Ctrl\+c:cancel|ctrl\+c to stop|esc[[:space:]]+to[[:space:]]+cancel|esc twice to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
 FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT='esc to interrupt|…[[:space:]]+\([0-9]+[smh]'
+# Devin 3000.11.1: the working composer and interrupt hint are independent
+# delivery signals. Neither is used as semantic worker-state evidence.
+FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT='esc twice to interrupt|^[[:space:]]*❭ Guide Devin while it works$'
 FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT='esc to interrupt'
 FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT='esc interrupt'
 FM_DELIVERY_PI_BUSY_REGEX_DEFAULT='Working\.\.\.'
@@ -422,6 +429,7 @@ fm_busy_lines_match() {  # [harness]
   else
     case "$harness" in
       claude) regex=$FM_DELIVERY_CLAUDE_BUSY_REGEX_DEFAULT ;;
+      devin) regex=$FM_DELIVERY_DEVIN_BUSY_REGEX_DEFAULT ;;
       codex) regex=$FM_DELIVERY_CODEX_BUSY_REGEX_DEFAULT ;;
       opencode) regex=$FM_DELIVERY_OPENCODE_BUSY_REGEX_DEFAULT ;;
       pi|pi-signed) regex=$FM_DELIVERY_PI_BUSY_REGEX_DEFAULT ;;
@@ -447,7 +455,7 @@ fm_busy_lines_match() {  # [harness]
 # a dead-shell prompt and must never read `empty`. Newline-separated and
 # consumed by `read` rather than word splitting, so `$`, `%`, and `#` stay
 # literal and no entry is ever exposed to pathname expansion.
-FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩' '→')
+FM_COMPOSER_AGENT_PROMPT_GLYPHS=$(printf '%s\n' '❯' '›' '⟩' '→' '❭')
 FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 
 # The ONE fleet-wide idle-placeholder set: composer text a harness renders in
@@ -457,9 +465,11 @@ FM_COMPOSER_SHELL_PROMPT_GLYPHS=$(printf '%s\n' '>' '$' '%' '#')
 # hence the unanchored tail). cursor-agent renders
 # two, both anchored: `Plan, search, build anything` in a fresh session and
 # `Add a follow-up` once a turn has completed (verified live on cursor-agent
-# 2026.08.11-e8db854). FM_COMPOSER_IDLE_RE overrides for an unverified harness;
+# 2026.08.11-e8db854). Devin renders the anchored `Ask Devin to build features,
+# fix bugs, or work on your code` as dim text after its `❭` glyph (verified
+# live, devin 3000.11.1). FM_COMPOSER_IDLE_RE overrides for an unverified harness;
 # matching is case-insensitive.
-FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$'
+FM_COMPOSER_IDLE_RE_DEFAULT='^Type a message\.\.\.$|^Ask anything(\.\.\.|…)|^Plan, search, build anything$|^Add a follow-up$|^Ask Devin to build features, fix bugs, or work on your code$'
 
 # Opencode draws a mode/model footer line INSIDE its left-bar composer
 # ("Build · GPT-5.5 Fast OpenAI · high"). It is composer furniture, not typed
@@ -491,22 +501,13 @@ FM_COMPOSER_MODE_HINT_RE_DEFAULT='^[[:space:]]*(⏵|⏸)'
 # a middle dot. It is consulted only as the boundary BELOW a bare composer,
 # never on the composer row itself.
 FM_COMPOSER_OMP_STATUS_RE_DEFAULT='^[[:space:]]*(π|󰵗)[[:space:]]+·[[:space:]]|^[[:space:]]*'"$FM_OMP_SPINNER_FRAMES_RE"'[[:space:]]+[0-9]+[smh]([[:space:]]|$)|[[:space:]]·[[:space:]].*[0-9]+(\.[0-9]+)?%/[0-9]+K'
-# Pi (genuine Pi, not the omp wrapper) draws its own one-row status line
-# directly below its separator pair: a dollar-cost cell, a parenthesized
-# billing-mode tag, a context-usage cell, and a parenthesized reasoning-mode
-# tag, e.g. `$0.000 (sub) 0.0%/272k (auto)` (the row continues right-aligned
-# with `(<provider>) <model> • <effort>`, not matched here). Verified live
-# through Herdr on Pi 0.87.0/herdr 0.9.0 (task fm-pi-codex-auth): this exact
-# row's leading `$` satisfies FM_COMPOSER_SHELL_PROMPT_GLYPHS's bare-glyph
-# match, so without this carve-out the scan misreads Pi's own live footer as a
-# stale shell prompt sitting below its separator pair and the cursorless
-# staleness rule refuses a genuinely idle Pi composer as `unknown`. The
-# structural anchor (dollar amount, then a parenthesized tag, then a
-# percent-of-size ratio, then another parenthesized tag) is deliberately
-# distinctive from anything a real shell prompt renders, so a `$`-prefixed
-# row a human actually typed at a dead shell still trips the staleness rule
-# exactly as before.
-FM_COMPOSER_PI_FOOTER_RE_DEFAULT='^\$[0-9]+(\.[0-9]+)?[[:space:]]+\([a-z]+\)[[:space:]]+[0-9]+(\.[0-9]+)?%/[0-9]+[a-zA-Z]?[[:space:]]+\([a-z]+\)'
+# Pi's footer stats row opens at column 0 with the session cost when every
+# token counter is zero (`$0.000 (sub) 5.4%/272k (auto)` on pi 0.85.1).
+# That leading `$` is a cost cell, not a dead-shell prompt, only when a digit
+# follows it immediately; `$` then whitespace stays a prompt.
+# Consulted only as the dead-shell exception below, never as composer content,
+# so the same string typed between the separator pair still reads pending.
+FM_COMPOSER_PI_STATUS_RE_DEFAULT='^\$[0-9]+(\.[0-9]+)?([[:space:]]|$)'
 # Braille-pattern cells (U+2800..U+28FF) are animation furniture: codex-cli
 # 0.154.0 draws an idle "starfield" of them on the row above its `›` prompt
 # row, on the `›` row itself after the dim `Ask Codex to do anything`
@@ -891,13 +892,9 @@ _fm_composer_scan_screen() {  # <plain-screen> <cursor-or-empty> [extract-wrap]
     # Bare agent-glyph rows: the glyph itself is the container proof. Bare
     # shell glyphs are deliberately not candidates (dead-shell rule). Keep
     # lower shell prompts as staleness evidence for cursorless selection.
-    # Pi's own footer furniture is excluded first: it carries a bare `$` the
-    # dead-shell rule would otherwise misread as a live shell prompt below a
-    # stale separator pair, even though the pair above it is Pi very much
-    # alive (see FM_COMPOSER_PI_FOOTER_RE_DEFAULT).
-    if _fm_composer_row_is_pi_footer "$trimmed"; then
-      :
-    elif [ "$top" -lt 0 ] && fm_composer_leading_shell_glyph_var glyph "$trimmed"; then
+    # Pi's cost footer can open with `$0.000`; that is furniture, not a prompt.
+    if [ "$top" -lt 0 ] && fm_composer_leading_shell_glyph_var glyph "$trimmed" \
+       && ! _fm_composer_row_is_pi_status "$trimmed"; then
       FM_COMPOSER_SCAN_SHELL_ROW=$row
     elif fm_composer_leading_agent_glyph_var glyph "$trimmed"; then
       FM_COMPOSER_SCAN_BARE_ROW=$row
@@ -1204,12 +1201,11 @@ _fm_composer_row_is_omp_status() {  # <trimmed-row>
   fm_composer_idle_matches "$1" "${FM_COMPOSER_OMP_STATUS_RE:-$FM_COMPOSER_OMP_STATUS_RE_DEFAULT}" sensitive
 }
 
-# _fm_composer_row_is_pi_footer: 0 when the trimmed row is Pi's own cost/mode
-# status line (FM_COMPOSER_PI_FOOTER_RE_DEFAULT above) - furniture Pi draws
-# below its own live separator pair, never a shell prompt even though it
-# begins with the same bare `$` glyph the dead-shell rule watches for.
-_fm_composer_row_is_pi_footer() {  # <trimmed-row>
-  fm_composer_idle_matches "$1" "${FM_COMPOSER_PI_FOOTER_RE:-$FM_COMPOSER_PI_FOOTER_RE_DEFAULT}" sensitive
+# _fm_composer_row_is_pi_status: 0 when the trimmed row is Pi's dollar-first
+# footer stats row (FM_COMPOSER_PI_STATUS_RE_DEFAULT above). Furniture below
+# the separated pair; a `$` cost cell must not count as a dead-shell prompt.
+_fm_composer_row_is_pi_status() {  # <trimmed-row>
+  fm_composer_idle_matches "$1" "$FM_COMPOSER_PI_STATUS_RE_DEFAULT" sensitive
 }
 
 # _fm_composer_row_is_braille_furniture: 0 when the row is non-blank and its
