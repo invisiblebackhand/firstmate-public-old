@@ -15,7 +15,8 @@
 #           and then takes exactly the `note` path.
 #   status  Answer "what is happening" from durable records ONLY. Reads no
 #           network and appends NO wake, so it never interrupts work and is safe
-#           to run in a loop.
+#           to run in a loop. Shows every in-flight backlog item, capping each
+#           displayed line independently at 150 UTF-8 characters.
 #   ask     Answer a side question with a one-shot model call that never touches
 #           firstmate, the backlog, or the wake queue. A side question is not
 #           fleet work and must not become fleet work.
@@ -1061,7 +1062,10 @@ cmd_status() {
   if [ -f "$DATA/backlog.md" ]; then
     printf '\n--- in flight ---\n'
     awk '/^## In flight/{f=1;next} /^## /{f=0} f && /^- \[/{print}' \
-      "$DATA/backlog.md" | sed 's/^- \[ \] /  /' | utf8_truncate 150
+      "$DATA/backlog.md" | sed 's/^- \[ \] /  /' | while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s' "$line" | utf8_truncate 150
+        printf '\n'
+      done
   else
     printf '\n(no backlog at %s)\n' "$DATA/backlog.md"
   fi
