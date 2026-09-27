@@ -655,7 +655,7 @@ test_secondmate_marked_request_reporting_contract() {
     "secondmate charter did not reject a separate receipt/start acknowledgement"
   assert_grep "Never append \`working:\` merely to acknowledge receipt or announce that a marked request has started." "$brief" \
     "secondmate charter did not forbid a generic working acknowledgement"
-  assert_grep "When a marked request is instead still in progress as its turn ends, append one correlated keyed \`working [key=<work-slug>]: {actual phase reached}\` line before the turn ends" "$brief" \
+  assert_grep "When a marked request is instead still in progress as its turn ends, append one correlated keyed \`working [key=<work-slug>] [corr=<id>]: {actual phase reached}\` line before the turn ends" "$brief" \
     "secondmate charter did not require a correlated keyed working line for a marked request still in progress at turn end"
   assert_grep 'let the keyed-phase rule below carry that same key through to the final answer' "$brief" \
     "secondmate charter did not carry the in-progress marked request's key through to its final answer"
