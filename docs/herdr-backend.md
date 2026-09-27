@@ -628,7 +628,6 @@ A blocked Pi is parked on an interactive prompt, so its blank composer region is
 That state defers instead of proving emptiness.
 A working Pi, pending middle row, missing identity, incomplete separator pair, or over-tall candidate remains unknown or pending.
 Identity stays a lazy second read, consulted only when a separator pair could change the verdict.
-Pi's dollar-first cost and status footer below that pair is TUI furniture even though its dollar amount begins with the shell-prompt glyph `$`; a bare `$`, `$ ls`, and `$ 0.000` still refuse injection.
 
 ### Placeholder and ghost text
 
