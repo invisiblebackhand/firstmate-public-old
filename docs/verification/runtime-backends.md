@@ -783,9 +783,9 @@ $0.000 (sub) 0.0%/272k (auto)                 (openai-codex) gpt-5.6-terra • m
 
 The footer's leading `$` matched the shared bare-shell-prompt signal, so the cursorless staleness check treated Pi's live footer as a dead shell below a stale separator pair and returned `unknown` for the genuinely empty composer.
 That verdict made `bin/fm-control.sh <task> relaunch` refuse before typing Pi's `/quit`, as the control plane requires whenever composer emptiness is unproved.
-After the fix, the full footer shape is treated as Pi furniture and the same idle pane reads `empty`; a lone `$`, a dollar amount followed by arbitrary text, and every other near miss remain shell evidence and still read `unknown`.
+After the fix, the captured footer is treated as Pi furniture and the same idle pane reads `empty`; the broader dollar-first status row `$0.000 (sub) 5.4%/272k (auto)` also reads `empty` under an idle Pi identity, while a lone `$`, `$ ls`, and `$ 0.000` below the pair still read `unknown`.
 
-`tests/fm-composer-lib.test.sh` pins the captured shape, the before-and-after verdict, and both dead-shell negatives.
+`tests/fm-composer-lib.test.sh` pins the captured shape, the dollar-first status row, and the dead-shell negatives.
 The live refresh guard launches the installed Pi without a prompt in an isolated Herdr lab session, waits for native idle, and checks the real rendered composer without spending model tokens:
 
 ```sh
