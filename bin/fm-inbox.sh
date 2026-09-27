@@ -1061,7 +1061,10 @@ cmd_status() {
   if [ -f "$DATA/backlog.md" ]; then
     printf '\n--- in flight ---\n'
     awk '/^## In flight/{f=1;next} /^## /{f=0} f && /^- \[/{print}' \
-      "$DATA/backlog.md" | sed 's/^- \[ \] /  /' | utf8_truncate 150
+      "$DATA/backlog.md" | sed 's/^- \[ \] /  /' | while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s' "$line" | utf8_truncate 150
+        printf '\n'
+      done
   else
     printf '\n(no backlog at %s)\n' "$DATA/backlog.md"
   fi
