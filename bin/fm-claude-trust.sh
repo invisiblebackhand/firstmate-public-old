@@ -5,8 +5,8 @@
 # instead of wedging on the trust dialog. In worktree mode it also carries
 # forward the external-CLAUDE.md-import approval, but only when the primary
 # checkout already holds standing consent for it - see the consent-gating
-# block below for why that dialog is otherwise left for the worker to wedge
-# on rather than answered on the human's behalf.
+# block below for why any such dialog is left for the worker to wedge on
+# rather than answered on the human's behalf.
 #
 # Usage: fm-claude-trust.sh <worktree> <project>
 #        fm-claude-trust.sh --secondmate-home <home> <id>
