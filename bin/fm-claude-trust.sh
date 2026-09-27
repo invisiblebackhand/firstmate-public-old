@@ -30,12 +30,12 @@
 # Code's separate "Allow external CLAUDE.md file imports?" dialog, which
 # `--setting-sources project,local` (firstmate PR 10's minimal worker tool
 # surface) stopped suppressing: it renders whenever a loaded CLAUDE.md chain
-# reaches outside the project tree - which every crewmate's does, through the
-# captain's own `~/.claude/CLAUDE.md` importing `~/.claude/RTK.md` - and it is
-# gated the same fail-closed way as trust: cursor on "No, disable", no arrow
-# navigation from firstmate's steering plane. Only worktree mode reaches this
-# second dialog's flags: a secondmate home has no separate "project" entry to
-# carry consent forward from, so its registration stays trust-only.
+# reaches outside the project tree - for example an import in the operator's own
+# `~/.claude/CLAUDE.md`, or a `CLAUDE.md` in a directory above the worktree -
+# and it is gated the same fail-closed way as trust: cursor on "No, disable", no
+# arrow navigation from firstmate's steering plane. Only worktree mode reaches
+# this second dialog's flags: a secondmate home has no separate "project" entry
+# to carry consent forward from, so its registration stays trust-only.
 #
 # TWO PROJECT-CONFIG ENTRIES IN WORKTREE MODE, NOT ONE. Registering both flags
 # on the worktree entry alone (the original trust-only design) leaves the
