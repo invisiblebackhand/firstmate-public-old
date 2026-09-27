@@ -229,8 +229,9 @@ Two channels feed that one intake today, and both are ordinary callers rather th
 It reads only rows tagged `choice` and relays a card's declared close mode.
 It can never let freeform captain prose forge a task id or a mode.
 
-Captain-authored note and display-label fields use decoded Unicode characters, not encoded bytes, as their unit, and both the Lavish adapter and keyed-answer intake enforce a 512-character limit.
-Characters are the contract because these fields are human text and byte truncation can split a multibyte UTF-8 sequence; explicit decoding also makes the boundary independent of the caller's locale.
+The Lavish adapter rejects a captured note longer than 512 decoded Unicode characters and truncates its display label to 512 characters.
+The keyed-answer intake folds control characters and truncates its source, answer, and display label to 512 decoded Unicode characters before recording them.
+Character counting keeps multibyte UTF-8 sequences intact regardless of the caller's locale.
 
 Trusted external process-event adapters intentionally expose no answer operation and cannot feed this authority-bearing intake; [`extension-bindings.md`](extension-bindings.md#trust-boundary) owns that boundary.
 
