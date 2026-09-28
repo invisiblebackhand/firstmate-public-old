@@ -5,6 +5,14 @@
 # Usage:
 #   fm-dispatch-resolve.sh <brief-file> [--project <name>]
 #
+# typed_resolution gate: resolution is off when config/crew-dispatch.json
+#   omits the field or sets it to "off". This gate runs before key access or
+#   brief preparation: one "dispatch-resolve: off" line naming the reason on
+#   stderr, nothing on stdout, exit 0, no network call. Only an explicit
+#   "on" proceeds to the key gate. Any other value is an exit 2 config error.
+#   Each home takes this default when it runs the updated code. Set "on" in
+#   the main home's config to re-enable after propagation to secondmate homes.
+#
 # Opt-in gate: TYPESAFE_API_KEY non-empty in this process environment, else a
 #   TYPESAFE_API_KEY= line in $FM_HOME/.env read with fmx_env_get, the same
 #   accessor as FMX_PAIRING_TOKEN (bin/fm-env-lib.sh). The environment wins.
@@ -30,8 +38,8 @@
 #   reads its own account's row and an expanded provider with no row for the
 #   candidate is unmeasured, never blocked), and the spendPriority argmax over
 #   the eligible candidates. The model never sees quota, catalogs, approvals,
-#   confidence floors, `why`, or `use`. With no rules, it returns a non-clear
-#   result so firstmate keeps using the existing intake.
+#   confidence floors, `why`, or `use`. An enabled file with no rules returns a
+#   non-clear result so firstmate keeps using the existing intake.
 #   docs/configuration.md "Crew dispatch profiles" owns the declared fields and
 #   "Typed dispatch resolution" owns this tool's operator contract.
 #
@@ -66,9 +74,7 @@
 #   inspectable answer plus every candidate's evidence, in code.
 set -u
 
-TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
-export -n TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
-unset TYPESAFE_API_KEY
+export -n TYPESAFE_API_KEY TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
@@ -184,7 +190,35 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# ---- typed_resolution gate ------------------------------------------------------
+TYPED_RESOLUTION=absent
+if [ -r "$RULES_PATH" ]; then
+  command -v jq >/dev/null 2>&1 || die "jq required"
+  RULES=$(mktemp) || die "mktemp failed"
+  trap 'rm -f "$RULES"' EXIT
+  cp "$RULES_PATH" "$RULES" || die "could not snapshot rules file: $RULES_PATH"
+  chmod 400 "$RULES" || die "could not protect rules snapshot"
+  TYPED_RESOLUTION=$(jq -er 'if has("typed_resolution") then "present:" + (.typed_resolution | tostring) else "absent" end' "$RULES" 2>/dev/null) || die "malformed rules file: $RULES_PATH (not JSON)"
+elif [ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ]; then
+  die "rules file not readable: $RULES_PATH"
+fi
+case "$TYPED_RESOLUTION" in
+  present:on) : ;;
+  absent)
+    echo "dispatch-resolve: off (typed_resolution absent from config/crew-dispatch.json)" >&2
+    exit 0
+    ;;
+  present:off)
+    echo "dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)" >&2
+    exit 0
+    ;;
+  *) die "malformed rules file: $RULES_PATH - typed_resolution must be \"on\" or \"off\" when present" ;;
+esac
+
 # ---- opt-in gate ---------------------------------------------------------------
+TYPESAFE_API_KEY_PRIVATE=${TYPESAFE_API_KEY:-}
+export -n TYPESAFE_API_KEY_PRIVATE 2>/dev/null || true
+unset TYPESAFE_API_KEY
 if [ -z "$TYPESAFE_API_KEY_PRIVATE" ]; then
   TYPESAFE_API_KEY_PRIVATE=$(fmx_env_get TYPESAFE_API_KEY "$FM_HOME/.env")
 fi
@@ -208,13 +242,6 @@ if ! fm_pr_task_id_valid "$TASK_LABEL"; then
   emit_error "could not derive task label from brief path"
 fi
 LEDGER_READY=1
-command -v jq >/dev/null 2>&1 || die "jq required"
-[ -e "$RULES_PATH" ] || [ -L "$RULES_PATH" ] || no_rules
-[ -r "$RULES_PATH" ] || die "rules file not readable: $RULES_PATH"
-RULES=$(mktemp) || die "mktemp failed"
-trap 'rm -f "$RULES"' EXIT
-cp "$RULES_PATH" "$RULES" || die "could not snapshot rules file: $RULES_PATH"
-chmod 400 "$RULES" || die "could not protect rules snapshot"
 VERIFIED_HARNESSES=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
 
 # The fields this tool consumes must be well formed; bootstrap owns the wider

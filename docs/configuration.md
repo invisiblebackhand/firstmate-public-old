@@ -1022,6 +1022,7 @@ This section is the single owner of the canonical schema and its per-field seman
 | `use` and optional top-level `default` | Accept one profile object or a non-empty array of profile objects; the single-object form remains fully backward-compatible. |
 | Profile `harness` | Required in every profile. |
 | Profile `model` and `effort`; rule `why` | Optional. |
+| Top-level `typed_resolution` | Optional `"on"`/`"off"` switch owned by [Typed dispatch resolution](#typed-dispatch-resolution-env-typesafe_api_key); absent means off. |
 
 **Fields applied only by typed resolution**
 
@@ -1044,7 +1045,7 @@ Set it high when a wrong pick is costly and low when the rule is a safe runner-u
 **Provider identifiers and mappings**
 
 A profile `provider` optionally names the quota-axi provider family whose rows apply to that profile; when present, profile and rule-floor provider IDs must match the strict whole-string pattern `^[a-z0-9]+(-[a-z0-9]+)*\z`.
-Bootstrap validates resolver-only `approval`, `min_confidence`, `floor`, and present `provider` values only while typed resolution is active; without the key those inert fields and the pre-existing verified-harness baseline preserve bootstrap behavior.
+Bootstrap validates resolver-only `approval`, `min_confidence`, `floor`, and present `provider` values only when `typed_resolution` is `"on"` and a key is present; otherwise those inert fields and the pre-existing verified-harness baseline preserve bootstrap behavior.
 
 Typed resolution additively recognizes `gemini` because AGENTS.md section 4 verifies it for crewmate and scout dispatch.
 
@@ -1078,7 +1079,7 @@ See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a star
 - When the file exists, bootstrap validates it with `jq`.
 - Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
 - Malformed JSON, malformed rules, an empty or malformed profile array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`.
-- While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic; without the key those inert declarations preserve the pre-existing bootstrap behavior.
+- While typed resolution is active, malformed `approval`, `min_confidence`, `floor`, and present `provider` declarations receive the same diagnostic.
 - Missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 - While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 
@@ -1089,10 +1090,19 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ## Typed dispatch resolution (.env TYPESAFE_API_KEY)
 
 `bin/fm-dispatch-resolve.sh` resolves one concrete crewmate or scout profile from a written brief with typesafe.ai's System One model (Jev), so the rule match that firstmate otherwise reasons out in its own context becomes one short tool turn.
-It is off unless `TYPESAFE_API_KEY` is non-empty in the calling environment or the home's gitignored `.env` holds a `TYPESAFE_API_KEY=` line; the environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
-
-Off means one `dispatch-resolve: off` line on stderr, nothing on stdout, exit 0, and no network call, so firstmate dispatches exactly as it does without the tool.
 This section is the single owner of the tool's operator contract; the script header owns its exact flags and output lines, and "Crew dispatch profiles" above owns the declared rule and profile fields it applies.
+
+**Typed resolution switch**
+
+An absent `typed_resolution` field or explicit `"off"` turns the tool off before any key is read (environment or `.env`) or brief content is prepared: one `dispatch-resolve: off` line naming the reason on stderr, nothing on stdout, exit 0, and no network call.
+An explicit `"on"` enables the key gate: `TYPESAFE_API_KEY` must be non-empty in the calling environment or the home's gitignored `.env` must hold a `TYPESAFE_API_KEY=` line.
+The environment wins, matching the Relay and mail-plane contracts, and the Relay accessor in `bin/fm-env-lib.sh` reads the line.
+Without a key the tool takes the same off path; with a key it runs the existing resolution path.
+Any other field value is an actionable exit 2 configuration error.
+The off default takes effect in each home when that home runs the updated code.
+To re-enable resolution, set `"typed_resolution": "on"` in the main home's `config/crew-dispatch.json`; secondmate homes receive that setting through config propagation.
+No key needs to be moved or deleted to switch it.
+`bin/fm-bootstrap.sh` validates the field alongside the rest of this file.
 
 Rules come only from the effective home's `config/crew-dispatch.json`; `FM_CONFIG_OVERRIDE` selects the config directory for tests and specialized setup like the other scripts.
 
@@ -1102,7 +1112,7 @@ bin/fm-dispatch-resolve.sh data/<id>/brief.md --project <name>        # TOON blo
 
 **When firstmate invokes the resolver**
 
-Firstmate invokes the resolve path directly after writing the brief, without a preflight; the absent-key off line is handled exactly like every other non-clear outcome.
+Firstmate invokes the resolve path directly after writing the brief, without a preflight; every off line returns control to its existing dispatch intake.
 
 **What the model receives**
 
@@ -1116,7 +1126,9 @@ The scaffold's standard setup, rules, and definition-of-done text is the same in
 
 **Missing or invalid rules**
 
-An absent rules file, a default-only file, or `rules: []` returns the non-clear reason `no rules to match` without a model or quota request, leaving firstmate's existing routing in control; an existing but unreadable or malformed rules file, including a broken symlink, remains an actionable exit 2 configuration error.
+An absent rules file takes the off path before reading the key or brief.
+With typed resolution enabled, a default-only file or `rules: []` returns the non-clear reason `no rules to match` without a model or quota request, leaving firstmate's existing routing in control.
+An existing but unreadable or malformed rules file, including a broken symlink, remains an actionable exit 2 configuration error.
 
 **Checks performed after the answer**
 
@@ -1162,7 +1174,7 @@ No qualifying option, or two equally probable qualifying options, produces `ambi
 Every result above exits 0.
 
 - Response probabilities must contain exactly every offered choice, use numeric values from 0 through 1, and sum to approximately 1 within 0.01.
-- Only a usage or configuration error exits 2: an unreadable brief, an existing but unreadable or malformed canonical rules file, or missing `jq`, each reported and never selected around.
+- Only a usage or configuration error exits 2: an unreadable brief, an existing but unreadable or malformed canonical rules file, or missing `jq` when a rules file exists, each reported and never selected around.
 - Missing `curl` is a normal structured `error` outcome with exit 0 so firstmate uses today's routing.
 
 **Firstmate retains the dispatch decision**
@@ -1172,10 +1184,10 @@ By accepted design, a `clear` result does not enforce catalog/authentication, re
 
 Firstmate passes its profile line unless it states a reason to override, such as the brief's reasoning class or an eligible-unranked-candidate note; every non-clear result returns to the full existing intake.
 
-The resolver, monitor, and bootstrap copy an environment-provided key into a non-exported private variable and unset `TYPESAFE_API_KEY` before launching child processes, so the secret is absent from child environments.
+The resolver removes the key's export flag before its switch gate, then copies and unsets the environment-provided key only on the enabled path; the monitor and bootstrap copy it into a non-exported private variable and unset it before launching child processes, so the secret is absent from child environments.
 The resolver and monitor send the key to `curl` only as a header read from a file descriptor, never on argv, and nothing prints, logs, or writes it.
 The resolver fixes the endpoint at `https://api.typesafe.ai`, model at `jev-1.13.0`, default confidence floor at 0.6, and request timeout at 5 seconds; `TYPESAFE_API_KEY` is its only resolver-specific environment setting.
-Once a readable brief determines the per-home ledger destination, every later opted-in resolver outcome with a valid destination appends one JSON line to that Firstmate home's gitignored `state/jev-usage.jsonl` with `at` (Unix epoch seconds), `task` (the task ID from the brief path's physical parent directory, or `unknown` when that label cannot be derived), `status`, nullable `reason` (`no_rules` when no dispatch rule exists), `rule`, `confidence`, the answering `model`, `input_tokens`, and `x-typesafe-request-id`; argument and unreadable-brief failures before that boundary remain unrecorded, while an unsafe or unwritable destination is refused without modification.
+Once a readable brief determines the per-home ledger destination, every later opted-in resolver outcome with a valid destination appends one JSON line to that Firstmate home's gitignored `state/jev-usage.jsonl` with `at` (Unix epoch seconds), `task` (the task ID from the brief path's physical parent directory, or `unknown` when that label cannot be derived), `status`, nullable `reason` (`no_rules` when an enabled file has no dispatch rule), `rule`, `confidence`, the answering `model`, `input_tokens`, and `x-typesafe-request-id`; off outcomes and failures before that boundary remain unrecorded, while an unsafe or unwritable destination is refused without modification.
 Each home keeps a separate ledger containing only resolver calls made from that home; it is keyed by neither TypeSafe account nor API key and excludes every other Jev consumer.
 The resolver creates the ledger as a mode-0600 single-link regular file and refuses any existing destination that does not retain those properties.
 Failed or partial attempts use `status: "error"` and retain nulls for metadata the service did not return validly.
@@ -1185,7 +1197,7 @@ The live API and rule-match evidence, plus the offline resolver and monitor cove
 ## Jev monitoring (bin/fm-jev-check.sh)
 
 `bin/fm-jev-check.sh check` is the one-line custom watcher check for the TypeSafe/Jev follow-up.
-It uses the same `TYPESAFE_API_KEY` opt-in as typed dispatch resolution and is inert when the key is absent.
+It uses the `TYPESAFE_API_KEY` key but does not use the resolver's `typed_resolution` switch; it is inert when the key is absent.
 It makes the unmetered `GET /v1/models` request and reports a changed `jev-latest.release_date`, with the required reminder to replay the dispatch tests before changing a pinned model.
 The external Claude Code compact-adviser plugin has no model setting, so it stays on the moving `jev-latest` alias by default, and this alias-move alert covers it.
 It also sums valid input-token metering from that home's resolver ledger, including calls whose answers were later rejected conservatively, at the documented price of USD 0.042 per million input tokens and alerts when recorded local usage reaches USD 10 in the current UTC month or USD 1 in the current UTC calendar day.
@@ -2337,7 +2349,7 @@ FMX_RELAY_URL=https://myfirstmate.io   # optional Relay endpoint override, mainl
 FMX_ENV_FILE=           # optional alternate .env file for direct Relay client invocations; bootstrap still checks $FM_HOME/.env
 FMX_DRY_RUN=            # truthy previews Relay replies and dismissals to state/x-outbox/ without posting or requiring a token
 FMX_X_REPLY_MAX_CHARS=280   # X reply per-message split budget; values below 50 clamp to 50
-TYPESAFE_API_KEY=       # TypeSafe/Jev opt-in, from the environment or .env; absent leaves dispatch resolution off and Jev monitoring inert (docs/configuration.md "Typed dispatch resolution" and "Jev monitoring")
+TYPESAFE_API_KEY=       # TypeSafe/Jev key from the environment or .env; dispatch resolution also requires typed_resolution on, while Jev monitoring uses the key alone (docs/configuration.md "Typed dispatch resolution" and "Jev monitoring")
 FMX_DISCORD_REPLY_MAX_CHARS=1900   # Discord reply per-message split budget; values below 50 clamp to 50, values above 2000 reset to 1900
 FMX_X_THREAD_MAX=25     # maximum messages in one auto-split reply thread
 FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting Relay completion follow-ups (7 days)

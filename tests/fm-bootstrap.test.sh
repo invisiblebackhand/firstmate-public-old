@@ -1116,6 +1116,10 @@ test_crew_dispatch_validation() {
     printf '%s\n' "$body" > "$case_dir/home/config/crew-dispatch.json"
     fakebin=$(make_fake_toolchain "$case_dir")
     add_real_jq "$fakebin"
+    if jq -e 'type == "object" and (has("typed_resolution") | not)' "$case_dir/home/config/crew-dispatch.json" >/dev/null 2>&1; then
+      jq '.typed_resolution = "on"' "$case_dir/home/config/crew-dispatch.json" > "$case_dir/active-dispatch.json"
+      mv "$case_dir/active-dispatch.json" "$case_dir/home/config/crew-dispatch.json"
+    fi
     out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
       TYPESAFE_API_KEY=test-key FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
     case "$mode" in
@@ -1182,6 +1186,11 @@ default array profile without harness is flagged^{"default":[{"model":"gpt-5.5"}
 default array malformed effort is flagged^{"default":[{"harness":"codex","effort":3}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
 default profile floor without min_percent is flagged^{"default":[{"harness":"codex","floor":{"scope":"all_models"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile floor needs scope and min_percent 0..100
 default profile floor provider override is flagged^{"default":{"harness":"codex","floor":{"scope":"all_models","min_percent":50,"provider":"claude"}}}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - default profile floor needs scope and min_percent 0..100
+typed_resolution off is accepted^{"typed_resolution":"off","rules":[{"when":"anything","use":{"harness":"claude"}}]}^empty^
+typed_resolution on is accepted^{"typed_resolution":"on","rules":[{"when":"anything","use":{"harness":"claude"}}]}^empty^
+unknown typed_resolution string is flagged^{"typed_resolution":"maybe","rules":[{"when":"anything","use":{"harness":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - typed_resolution must be "on" or "off" when present
+non-string typed_resolution is flagged^{"typed_resolution":5,"rules":[{"when":"anything","use":{"harness":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - typed_resolution must be "on" or "off" when present
+null typed_resolution is flagged^{"typed_resolution":null,"rules":[{"when":"anything","use":{"harness":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - typed_resolution must be "on" or "off" when present
 ROWS
 
   case_dir="$TMP_ROOT/dispatch-opt-in-gate"
@@ -1209,15 +1218,25 @@ ROWS
   printf '%s\n' 'TYPESAFE_API_KEY=test-key' > "$case_dir/home/.env"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "absent typed_resolution must leave resolver-only fields inert, got: $out"
+  jq '.typed_resolution = "off"' "$case_dir/home/config/crew-dispatch.json" > "$case_dir/off-dispatch.json"
+  mv "$case_dir/off-dispatch.json" "$case_dir/home/config/crew-dispatch.json"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "typed_resolution off must leave resolver-only fields inert, got: $out"
+  jq '.typed_resolution = "on"' "$case_dir/home/config/crew-dispatch.json" > "$case_dir/on-dispatch.json"
+  mv "$case_dir/on-dispatch.json" "$case_dir/home/config/crew-dispatch.json"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
   [ "$out" = 'CREW_DISPATCH: invalid config/crew-dispatch.json - use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present' ] \
-    || fail "typed .env key must activate resolver-field validation, got: $out"
+    || fail "typed_resolution on with .env key must activate resolver-field validation, got: $out"
 
   rm -f "$case_dir/home/.env"
   printf '%s\n' '{"default":{"harness":"devin","model":"swe-2-medium"}}' > "$case_dir/home/config/crew-dispatch.json"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
   [ -z "$out" ] || fail "no-key bootstrap must accept the verified devin worker adapter, got: $out"
-  printf '%s\n' '{"rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$case_dir/home/config/crew-dispatch.json"
+  printf '%s\n' '{"typed_resolution":"on","rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$case_dir/home/config/crew-dispatch.json"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
   [ "$out" = 'CREW_DISPATCH: invalid config/crew-dispatch.json - unverified harness: gemini' ] \
@@ -1236,7 +1255,7 @@ ROWS
   child_env=$(cat "$case_dir/child-env.log")
   [ -n "$child_env" ] || fail "bootstrap child environment probe did not run"
   assert_not_contains "$child_env" 'secret-present' "bootstrap children never inherit the typesafe key"
-  pass "bootstrap gates resolver fields and additive harnesses on the typed key"
+  pass "bootstrap gates resolver fields and additive harnesses on typed on plus key"
 }
 
 test_bootstrap_reporting

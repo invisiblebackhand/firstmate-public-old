@@ -43,6 +43,7 @@ MD
 
 cat > "$BASE_RULES" <<'JSON'
 {
+  "typed_resolution": "on",
   "rules": [
     {
       "when": "New feature work on the app.",
@@ -177,6 +178,35 @@ cat "${QUOTA_AXI_FIXTURE:?}"
 SH
 chmod +x "$FAKEBIN/quota-axi"
 
+REAL_CP=$(command -v cp)
+export REAL_CP
+cat > "$FAKEBIN/cp" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ]; then
+  printf 'cp:secret-present\n' >> "${CHILD_ENV_LOG:?}"
+else
+  printf 'cp:clean\n' >> "${CHILD_ENV_LOG:?}"
+fi
+if [ -n "${FAKE_RULES_REPLACEMENT_SOURCE:-}" ] && [ "$1" = "${FAKE_RULES_PATH:-}" ]; then
+  mv "$FAKE_RULES_REPLACEMENT_SOURCE" "$FAKE_RULES_PATH"
+fi
+exec "$REAL_CP" "$@"
+SH
+chmod +x "$FAKEBIN/cp"
+
+REAL_JQ=$(command -v jq)
+export REAL_JQ
+cat > "$FAKEBIN/jq" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${TYPESAFE_API_KEY+x}" ] || [ -n "${TYPESAFE_API_KEY_PRIVATE+x}" ]; then
+  printf 'jq:secret-present\n' >> "${CHILD_ENV_LOG:?}"
+else
+  printf 'jq:clean\n' >> "${CHILD_ENV_LOG:?}"
+fi
+exec "$REAL_JQ" "$@"
+SH
+chmod +x "$FAKEBIN/jq"
+
 RESPONSE="$TMP_ROOT/response.json"
 export FAKE_CURL_LOG="$LOG" FAKE_CURL_RESPONSE="$RESPONSE" QUOTA_AXI_CALLS="$LOG/quota-axi.calls" QUOTA_AXI_FIXTURE="$QUOTA" CHILD_ENV_LOG="$LOG/child-env"
 
@@ -260,6 +290,59 @@ TYPESAFE_API_KEY=$KEY FM_CONFIG_OVERRIDE="$OVERRIDE_CONFIG" run code out err "$B
 assert_contains "$out" '  status: clear' "FM_CONFIG_OVERRIDE selects the canonical rules directory"
 pass "TYPESAFE_API_KEY= in .env activates the tool; environment and config overrides work"
 
+# --- typed_resolution gate: off by default in each home -----------------------
+jq '.typed_resolution = "off"' "$BASE_RULES" > "$RULES"
+rm -f "$HOME_DIR/state/jev-usage.jsonl"
+reset_log
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "typed_resolution off exits 0"
+assert_equals '' "$out" "typed_resolution off prints nothing on stdout"
+assert_equals 'dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)' "$err" "typed_resolution off names itself on stderr"
+assert_absent "$LOG/argv" "typed_resolution off never calls curl, even with a key present"
+assert_absent "$LOG/quota-axi.calls" "typed_resolution off never reads quota-axi"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "typed_resolution off never touches the resolver ledger"
+assert_contains "$(cat "$LOG/child-env")" 'jq:clean' "typed_resolution off keeps the key out of config-reader children"
+assert_not_contains "$(cat "$LOG/child-env")" 'secret-present' "typed_resolution off leaks no key to children"
+
+cp "$BASE_RULES" "$RULES"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "typed_resolution on exits 0"
+assert_contains "$out" '  status: clear' "typed_resolution on runs the normal path"
+assert_contains "$(cat "$LOG/argv")" 'https://api.typesafe.ai/v1/systemone' "typed_resolution on still reaches the stub"
+
+jq 'del(.typed_resolution)' "$BASE_RULES" > "$RULES"
+rm -f "$HOME_DIR/state/jev-usage.jsonl"
+reset_log
+write_response "$RESPONSE" rule_4 0.9
+TYPESAFE_API_KEY=$KEY run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "absent typed_resolution exits 0"
+assert_equals '' "$out" "absent typed_resolution prints nothing on stdout"
+assert_equals 'dispatch-resolve: off (typed_resolution absent from config/crew-dispatch.json)' "$err" "absent typed_resolution names itself on stderr"
+assert_absent "$LOG/argv" "absent typed_resolution never calls curl, even with a key present"
+assert_absent "$LOG/quota-axi.calls" "absent typed_resolution never reads quota-axi"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "absent typed_resolution never touches the resolver ledger"
+assert_contains "$(cat "$LOG/child-env")" 'jq:clean' "absent typed_resolution keeps the key out of config-reader children"
+assert_not_contains "$(cat "$LOG/child-env")" 'secret-present' "absent typed_resolution leaks no key to children"
+cp "$BASE_RULES" "$RULES"
+pass "typed resolution is off by default; explicit on reaches the stub"
+
+REPLACEMENT_RULES="$TMP_ROOT/replacement-rules.json"
+jq '.typed_resolution = "off"' "$BASE_RULES" > "$REPLACEMENT_RULES"
+rm -f "$HOME_DIR/state/jev-usage.jsonl"
+reset_log
+TYPESAFE_API_KEY=$KEY FAKE_RULES_PATH="$RULES" FAKE_RULES_REPLACEMENT_SOURCE="$REPLACEMENT_RULES" run code out err "$BRIEF" --project pager
+expect_code 0 "$code" "a replacement with typed_resolution off exits 0"
+assert_equals '' "$out" "a replacement with typed_resolution off prints nothing on stdout"
+assert_equals 'dispatch-resolve: off (typed_resolution is off in config/crew-dispatch.json)' "$err" "a replacement with typed_resolution off names itself"
+assert_absent "$LOG/argv" "a replacement with typed_resolution off never calls curl"
+assert_absent "$LOG/quota-axi.calls" "a replacement with typed_resolution off never reads quota-axi"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "a replacement with typed_resolution off never touches the resolver ledger"
+assert_equals 'off' "$(jq -r '.typed_resolution' "$RULES")" "the replacement reached the canonical rules path"
+cp "$BASE_RULES" "$RULES"
+pass "the switch and request use one rules snapshot"
+
 # --- clear: request shape, secret handling, argmax --------------------------
 reset_log
 rm -f "$HOME_DIR/state/jev-usage.jsonl"
@@ -280,7 +363,10 @@ assert_contains "$argv" 'https://api.typesafe.ai/v1/systemone' "the request uses
 assert_contains "$argv" $'--max-time\n5' "the request uses the fixed five-second timeout"
 assert_contains "$argv" '@/dev/fd/3' "the header is read from a file descriptor"
 assert_equals "Authorization: Bearer $KEY" "$(cat "$LOG/header")" "curl receives the bearer header on fd 3"
-assert_equals $'curl:clean\nquota-axi:clean' "$(cat "$LOG/child-env")" "the API key is absent from every child environment"
+assert_contains "$(cat "$LOG/child-env")" 'jq:clean' "the config reader does not inherit the API key"
+assert_contains "$(cat "$LOG/child-env")" 'curl:clean' "curl does not inherit the API key"
+assert_contains "$(cat "$LOG/child-env")" 'quota-axi:clean' "quota-axi does not inherit the API key"
+assert_not_contains "$(cat "$LOG/child-env")" 'secret-present' "the API key is absent from every child environment"
 body=$(cat "$LOG/body")
 assert_equals 'jev-1.13.0' "$(jq -r .model <<<"$body")" "default model is pinned to the verified Jev release"
 assert_equals 'pager' "$(jq -r .state.task.project <<<"$body")" "project rides in the state"
@@ -423,6 +509,7 @@ pass "rules snapshots and shell quoting preserve the profile protocol"
 
 # --- no rules return control to the existing intake ----------------------------
 rm -f "$RULES"
+printf '%s\n' '{"typed_resolution":"on"}' > "$RULES"
 RELATIVE_BRIEF_DIR="$TMP_ROOT/data/relative-task"
 mkdir -p "$RELATIVE_BRIEF_DIR"
 cp "$BRIEF" "$RELATIVE_BRIEF_DIR/brief.md"
@@ -444,23 +531,19 @@ pass "bare and dot-relative brief paths derive their physical parent task ID"
 
 rm -f "$HOME_DIR/state/jev-usage.jsonl"
 reset_log
+rm -f "$RULES"
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 expect_code 0 "$code" "absent rules file exits 0"
-assert_contains "$out" '  status: escalate' "absent rules file is non-clear"
-assert_contains "$out" '  reason: no rules to match' "absent rules file returns control to firstmate"
-assert_not_contains "$out" '  profile:' "absent rules file emits no profile"
+assert_equals '' "$out" "absent rules file prints nothing on stdout"
+assert_equals 'dispatch-resolve: off (typed_resolution absent from config/crew-dispatch.json)' "$err" "absent rules file is off by default"
 assert_absent "$LOG/argv" "absent rules file never calls curl"
 assert_absent "$LOG/quota-axi.calls" "absent rules file never reads quota"
-assert_equals '1' "$(wc -l < "$HOME_DIR/state/jev-usage.jsonl" | tr -d '[:space:]')" "absent rules file did not record exactly one resolver outcome"
-assert_equals 'pager-task' "$(jq -r '.task' "$HOME_DIR/state/jev-usage.jsonl")" "absent rules record omitted the brief parent task ID"
-assert_equals 'escalate' "$(jq -r '.status' "$HOME_DIR/state/jev-usage.jsonl")" "absent rules record omitted the escalate outcome"
-assert_equals 'no_rules' "$(jq -r '.reason' "$HOME_DIR/state/jev-usage.jsonl")" "absent rules record omitted the no-rules reason"
-assert_equals '[null,null,null,null,null]' "$(jq -c '[.rule,.confidence,.model,.input_tokens,."x-typesafe-request-id"]' "$HOME_DIR/state/jev-usage.jsonl")" "absent rules record invented response metadata"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "absent rules file never touches the resolver ledger"
 
 DEFAULT_ONLY="$TMP_ROOT/default-only.json"
 EMPTY_RULES="$TMP_ROOT/empty-rules.json"
-printf '%s\n' '{"default":[{"harness":"claude","model":"opus"},{"harness":"cursor","model":"cursor-grok-4.6-high"}]}' > "$DEFAULT_ONLY"
-printf '%s\n' '{"rules":[],"default":[{"harness":"claude","model":"opus"},{"harness":"cursor","model":"cursor-grok-4.6-high"}]}' > "$EMPTY_RULES"
+printf '%s\n' '{"typed_resolution":"on","default":[{"harness":"claude","model":"opus"},{"harness":"cursor","model":"cursor-grok-4.6-high"}]}' > "$DEFAULT_ONLY"
+printf '%s\n' '{"typed_resolution":"on","rules":[],"default":[{"harness":"claude","model":"opus"},{"harness":"cursor","model":"cursor-grok-4.6-high"}]}' > "$EMPTY_RULES"
 for direct_rules in "$DEFAULT_ONLY" "$EMPTY_RULES"; do
   cp "$direct_rules" "$RULES"
   rm -f "$HOME_DIR/state/jev-usage.jsonl"
@@ -480,7 +563,7 @@ for direct_rules in "$DEFAULT_ONLY" "$EMPTY_RULES"; do
 done
 
 AGY_RULE="$TMP_ROOT/agy-rule.json"
-printf '%s\n' '{"rules":[{"when":"Agy work.","use":{"harness":"agy"}}]}' > "$AGY_RULE"
+printf '%s\n' '{"typed_resolution":"on","rules":[{"when":"Agy work.","use":{"harness":"agy"}}]}' > "$AGY_RULE"
 cp "$AGY_RULE" "$RULES"
 cat > "$RESPONSE" <<'JSON'
 {"model":"jev-1.13.0","answers":{"rule":{"type":"choice","choice":"rule_1","confidence":0.99,"probabilities":{"rule_1":0.99,"default":0.01}}},"usage":{"input_tokens":100,"output_tokens":60}}
@@ -491,14 +574,14 @@ assert_contains "$out" 'candidate: agy:-  provider=agy  scope=all_models  remain
 assert_contains "$out" "  profile: --harness 'agy'" "provider-less agy rule resolves"
 
 GEMINI_RULE="$TMP_ROOT/gemini-rule.json"
-printf '%s\n' '{"rules":[{"when":"Gemini work.","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$GEMINI_RULE"
+printf '%s\n' '{"typed_resolution":"on","rules":[{"when":"Gemini work.","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$GEMINI_RULE"
 cp "$GEMINI_RULE" "$RULES"
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 assert_contains "$out" 'candidate: gemini:gemini-3.8-flash-high  provider=google  scope=all_models  remaining=72%  spendPriority=0.3  runway=through_reset  -> eligible' "Gemini resolves through its explicit provider"
 assert_contains "$out" "  profile: --harness 'gemini' --model 'gemini-3.8-flash-high'" "Gemini is a typed verified dispatch harness"
 
-cp "$ROOT/docs/examples/crew-dispatch.json" "$RULES"
+jq '. + {typed_resolution: "on"}' "$ROOT/docs/examples/crew-dispatch.json" > "$RULES"
 cat > "$RESPONSE" <<'JSON'
 {"model":"jev-1.13.0","answers":{"rule":{"type":"choice","choice":"default","confidence":0.9,"probabilities":{"rule_1":0.02,"rule_2":0.02,"rule_3":0.02,"default":0.94}}},"usage":{"input_tokens":812,"output_tokens":60}}
 JSON
@@ -835,6 +918,7 @@ SCHEMA6="$TMP_ROOT/schema6.json"
 SCHEMA5_PAIR="$TMP_ROOT/schema5-pair.json"
 cat > "$LANE_RULES" <<'JSON'
 {
+  "typed_resolution": "on",
   "rules": [
     {
       "when": "Codex work.",
@@ -1102,9 +1186,9 @@ cp "$BASE_RULES" "$RULES"
 run_without_jq code out err "$BRIEF"
 expect_code 2 "$code" "missing jq exits 2"
 assert_contains "$err" 'jq required' "missing jq is named"
-assert_equals '1' "$(wc -l < "$HOME_DIR/state/jev-usage.jsonl" | tr -d '[:space:]')" "missing jq did not produce exactly one ledger record"
-assert_equals 'error' "$(jq -r '.status' "$HOME_DIR/state/jev-usage.jsonl")" "missing jq was not recorded as an error"
-assert_equals 'jq required' "$(jq -r '.reason' "$HOME_DIR/state/jev-usage.jsonl")" "missing jq ledger record omitted its reason"
+assert_equals '' "$out" "missing jq prints nothing on stdout"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "missing jq never reaches the ledger"
+assert_absent "$LOG/argv" "missing jq never reaches curl"
 
 reset_log
 rm -f "$HOME_DIR/state/jev-usage.jsonl"
@@ -1112,14 +1196,14 @@ printf '%s\n' '{"rules":[' > "$RULES"
 TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
 expect_code 2 "$code" "malformed rules exit 2"
 assert_contains "$err" 'not JSON' "malformed rules are named"
-assert_equals '1' "$(wc -l < "$HOME_DIR/state/jev-usage.jsonl" | tr -d '[:space:]')" "malformed rules did not produce exactly one ledger record"
-assert_equals 'error' "$(jq -r '.status' "$HOME_DIR/state/jev-usage.jsonl")" "malformed rules were not recorded as an error"
-assert_contains "$(jq -r '.reason' "$HOME_DIR/state/jev-usage.jsonl")" 'malformed rules file:' "malformed rules ledger record omitted its reason"
+assert_equals '' "$out" "malformed rules print nothing on stdout"
+assert_absent "$HOME_DIR/state/jev-usage.jsonl" "malformed rules never reach the ledger"
 assert_absent "$LOG/argv" "malformed rules reached the network"
-pass "post-boundary configuration failures append one error record"
+pass "switch parser failures stop before key and brief processing"
 
 reset_log
 rm -f "$HOME_DIR/state/jev-usage.jsonl"
+cp "$BASE_RULES" "$RULES"
 TYPESAFE_API_KEY=$KEY run code out err
 expect_code 2 "$code" "missing brief exits 2"
 assert_contains "$err" 'brief file required' "missing brief is named"
@@ -1151,8 +1235,9 @@ for bad in \
   '{"rules":[{"when":"x","use":{"harness":"grok","effort":"max"}}]}|each use profile effort must be supported by its harness and model' \
   '{"rules":[{"when":"x","use":{"harness":"opencode","model":"anthropic/claude-sonnet-4-5"}}]}|use profiles whose harness lacks one authoritative provider family require provider: opencode' \
   '{"rules":[{"when":"x","use":{"harness":"rovo"}}]}|use profiles whose harness lacks one authoritative provider family require provider: rovo' \
-  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"pi","model":"anthropic/claude-sonnet-5"}}|default profiles whose harness lacks one authoritative provider family require provider: pi'; do
-  printf '%s\n' "${bad%%|*}" > "$RULES"
+  '{"rules":[{"when":"x","use":{"harness":"codex"}}],"default":{"harness":"pi","model":"anthropic/claude-sonnet-5"}}|default profiles whose harness lacks one authoritative provider family require provider: pi' \
+  '{"typed_resolution":"maybe"}|typed_resolution must be "on" or "off" when present'; do
+  printf '%s\n' "${bad%%|*}" | jq 'if has("typed_resolution") then . else . + {typed_resolution: "on"} end' > "$RULES"
   TYPESAFE_API_KEY=$KEY run code out err "$BRIEF"
   expect_code 2 "$code" "malformed rules exit 2: ${bad#*|}"
   assert_contains "$err" "malformed rules file: $RULES - ${bad#*|}" "malformed rules are named: ${bad#*|}"
