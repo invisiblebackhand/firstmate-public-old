@@ -210,7 +210,10 @@ guard_file=$(quote_for_hook "$guard_file")
 guard_path=
 stdin_tmp=
 if [ -s "\$guard_file" ]; then
-  guard_path=\$(sed -e '/^[[:space:]]*\$/d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*\$//' -e 'q' "\$guard_file")
+  guard_path=\$(sed -e '/^[[:space:]]*\$/d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*\$//' -e 'q' "\$guard_file") || {
+    printf '%s\n' 'error: cannot read pre-push guard config' >&2
+    exit 1
+  }
 fi
 if [ -n "\${guard_path:-}" ]; then
   case "\$guard_path" in
@@ -225,7 +228,7 @@ if [ -n "\${guard_path:-}" ]; then
     exit 1
   fi
   stdin_tmp=\$(mktemp "\${TMPDIR:-/tmp}/fm-prepush-stdin.XXXXXX") || exit 1
-  cat >"\$stdin_tmp"
+  cat >"\$stdin_tmp" || { rc=\$?; rm -f "\$stdin_tmp"; exit \$rc; }
   "\$guard_path" "\$@" <"\$stdin_tmp" || { rc=\$?; rm -f "\$stdin_tmp"; exit \$rc; }
 fi
 ours=$(quote_for_hook "$ours")

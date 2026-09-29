@@ -307,6 +307,7 @@ test_pre_push_guard_pass_then_chain() {
   local repo hooks home guard records
   repo="$TMP_ROOT/prepush-pass"
   setup_push_repo "$repo"
+  git -C "$repo" config core.hooksPath .husky/_
   hooks="$TMP_ROOT/hooks-prepush-pass"
   home=$(make_firstmate_home "$TMP_ROOT/home-pass")
   records="$TMP_ROOT/guard-records-pass"
@@ -315,15 +316,69 @@ test_pre_push_guard_pass_then_chain() {
   write_guard_pass "$guard" "$records"
   printf '%s\n' "$guard" >"$home/config/pre-push-guard"
   FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
-  mkdir -p "$repo/.git/hooks"
-  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  mkdir -p "$repo/.husky/_"
+  write_record_hook "$repo/.husky/_/pre-push" "$repo/chained"
   printf 'note\n' >>"$repo/README.md"
   git -C "$repo" add README.md
   git -C "$repo" commit -q -m 'change'
   with_hooks_env "$hooks" git -C "$repo" push -q origin main || fail "push should succeed when guard passes"
   [ -f "$records/guard-stdin.txt" ] || fail "guard did not receive stdin"
-  [ -f "$repo/chained.ran" ] || fail "chained pre-push hook did not run"
-  pass "configured guard passes and the chained hook still runs without FM_HOME at push time"
+  [ -f "$repo/chained.ran" ] || fail "project core.hooksPath pre-push hook did not run"
+  pass "configured guard passes and chains the project core.hooksPath hook without FM_HOME at push time"
+}
+
+test_pre_push_guard_config_read_failure_refuses() {
+  local repo hooks home guard records fakebin rc
+  repo="$TMP_ROOT/prepush-config-read-fail"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-config-read-fail"
+  home=$(make_firstmate_home "$TMP_ROOT/home-config-read-fail")
+  records="$TMP_ROOT/guard-records-config-read-fail"
+  mkdir -p "$records"
+  guard="$TMP_ROOT/guard-config-read-fail.sh"
+  write_guard_pass "$guard" "$records"
+  printf '%s\n' "$guard" >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  fakebin="$TMP_ROOT/fakebin-config-read-fail"
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\nexit 1\n' >"$fakebin/sed"
+  chmod 700 "$fakebin/sed"
+  with_hooks_env "$hooks" env PATH="$fakebin:$PATH" git -C "$repo" push -q origin main; rc=$?
+  [ "$rc" -ne 0 ] || fail "push should fail when guard config cannot be read"
+  [ ! -f "$records/guard-stdin.txt" ] || fail "guard ran after config read failed"
+  [ ! -f "$repo/chained.ran" ] || fail "chained hook ran after config read failed"
+  pass "guard config read failure refuses the push before guard and chain"
+}
+
+test_pre_push_stdin_capture_failure_refuses() {
+  local repo hooks home guard records fakebin rc
+  repo="$TMP_ROOT/prepush-stdin-read-fail"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-stdin-read-fail"
+  home=$(make_firstmate_home "$TMP_ROOT/home-stdin-read-fail")
+  records="$TMP_ROOT/guard-records-stdin-read-fail"
+  mkdir -p "$records"
+  guard="$TMP_ROOT/guard-stdin-read-fail.sh"
+  write_guard_pass "$guard" "$records"
+  printf '%s\n' "$guard" >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  fakebin="$TMP_ROOT/fakebin-stdin-read-fail"
+  mkdir -p "$fakebin"
+  printf '#!/usr/bin/env bash\nprintf "partial\\n"\nexit 1\n' >"$fakebin/cat"
+  chmod 700 "$fakebin/cat"
+  with_hooks_env "$hooks" env PATH="$fakebin:$PATH" git -C "$repo" push -q origin main; rc=$?
+  [ "$rc" -ne 0 ] || fail "push should fail when stdin capture fails"
+  [ ! -f "$records/guard-stdin.txt" ] || fail "guard ran with partial stdin"
+  [ ! -f "$repo/chained.ran" ] || fail "chained hook ran after stdin capture failed"
+  pass "stdin capture failure refuses the push before guard and chain"
 }
 
 test_pre_push_guard_refusal() {
@@ -451,6 +506,8 @@ test_pane_hookspath_does_not_reroute_another_repository
 test_strip_msgfile_alone_does_not_rewrite_author_fields
 test_pre_push_unconfigured_passes_through
 test_pre_push_guard_pass_then_chain
+test_pre_push_guard_config_read_failure_refuses
+test_pre_push_stdin_capture_failure_refuses
 test_pre_push_guard_refusal
 test_pre_push_missing_guard_refuses
 test_pre_push_stdin_reaches_guard_and_chain
