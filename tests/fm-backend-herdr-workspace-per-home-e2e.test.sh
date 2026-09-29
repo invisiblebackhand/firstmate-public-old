@@ -231,7 +231,7 @@ pass "real herdr E2E: list_live from the secondmate's own context sees only task
 TD1_OUT="$TMP_ROOT/td1.out"
 FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$PRIMARY_HOME/state" FM_DATA_OVERRIDE="$PRIMARY_HOME/data" \
   FM_CONFIG_OVERRIDE="$PRIMARY_HOME/config" \
-  "$ROOT/bin/fm-teardown.sh" cm1 >"$TD1_OUT" 2>&1
+  "$ROOT/bin/fm-teardown.sh" cm1 --force >"$TD1_OUT" 2>&1
 rc=$?
 [ "$rc" -eq 0 ] || fail "fm-teardown.sh failed for the primary-shaped crewmate cm1"$'\n'"$(cat "$TD1_OUT")"
 [ -f "$CM1_META" ] && fail "fm-teardown.sh did not remove cm1's meta"
@@ -250,7 +250,7 @@ pass "real herdr E2E: tearing down cm1 closes only its own tab - the secondmate'
 TD2_OUT="$TMP_ROOT/td2.out"
 FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$SM_HOME/state" FM_DATA_OVERRIDE="$SM_HOME/data" \
   FM_CONFIG_OVERRIDE="$SM_HOME/config" \
-  "$ROOT/bin/fm-teardown.sh" cm2 >"$TD2_OUT" 2>&1
+  "$ROOT/bin/fm-teardown.sh" cm2 --force >"$TD2_OUT" 2>&1
 rc=$?
 [ "$rc" -eq 0 ] || fail "fm-teardown.sh failed for the secondmate-owned crewmate cm2"$'\n'"$(cat "$TD2_OUT")"
 [ -f "$CM2_META" ] && fail "fm-teardown.sh did not remove cm2's meta"
