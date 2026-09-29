@@ -1226,7 +1226,7 @@ This section is the single owner of the standard contract for any Jev consumer.
 1. Opt in only when a key is present, and leave the caller's ordinary path unchanged when it is absent.
 2. Keep the key in process memory or a file-descriptor header, never in argv, URLs, or logs.
 3. Pin a versioned model where behavior feeds a tuned threshold, and record the answering model on every model call.
-4. Bound each request with a hard timeout of 2 seconds for interactive or hook paths and 5 seconds for command-line paths.
+4. Bound each request with a hard timeout of 2 seconds for interactive or hook paths and 5 seconds for command-line paths, except the monitor's watcher-polled models-listing health request, which is bounded at 10 seconds because its only consumer is a background alarm; every other request, including every evaluation call, keeps the 2-second or 5-second bound.
 5. Validate the complete response shape before use; for a Choice answer, that includes the offered options, probabilities, confidence, and non-negative usage fields.
 6. Treat every API, timeout, malformed-response, or contradictory-response failure as the conservative path, with at most one diagnostic line.
 7. Do not retry interactive or hook work inside a call, and limit batch or command-line retries to two 429 or 529 retries that honor `retry-after`.
