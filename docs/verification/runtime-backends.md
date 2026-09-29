@@ -910,8 +910,7 @@ This guard is the refresh command after any harness upgrade; it spends a small n
 
 Claude Code offers its built-in `/auto-mode-setup` command to an auto-permission-mode worker at the end of a turn, as a dialog titled "Teach auto mode about your environment?" whose first option, Yes, is focused.
 Accepting it starts a wizard that reads the project, the user's recent Claude sessions, and optionally shell history and other repositories, then sends that material to a model.
-A steering doorbell's Enter would therefore accept it, so two controls are layered.
-`launch_template()` in `bin/fm-spawn.sh` launches every Claude worker and secondmate with `"skillOverrides":{"auto-mode-setup":"off"}` in its inline settings, and `fm_task_inbox_ring` in `bin/fm-task-inbox-lib.sh` never types into a Claude pane whose visible screen shows the dialog or the wizard screens that follow it.
+`bin/fm-spawn.sh` owns the launch override and `bin/fm-task-inbox-lib.sh` owns the doorbell guard; this section records the vendor evidence for both.
 
 This evidence is static and was read on 2026-09-28 from Claude Code 2.1.284 on macOS arm64.
 The dialog was never opened and `/auto-mode-setup` was never run, because that is exactly the transcript scan these controls keep off; no session was started against a model.
@@ -973,7 +972,7 @@ What those excerpts establish:
 ### Known limits
 
 The screen layout was never observed, so the verdict rests on the four strings and not on any box drawing or option glyph.
-The portable regressions in `tests/fm-task-inbox.test.sh` and `tests/fm-send-inbox.test.sh` show each string sufficient alone, a title wrapped across rows still matching, a truncated title and auto mode's own status row not matching, and a dismissed dialog left in scrollback not blocking, because only the visible viewport is read.
+The portable regressions in `tests/fm-task-inbox.test.sh` and `tests/fm-send-inbox.test.sh` show each string sufficient alone, a title wrapped across rows still matching, a truncated title and auto mode's own status row not matching, and a dismissed dialog left in scrollback not blocking on the tested tmux path, which reads only the visible viewport.
 A pane that quotes one of the strings while its worker reads idle, such as a worker that has just printed this repository's own source, is treated as the dialog: the ring defers and Escape is sent.
 Nothing is typed in that case, Escape reaches only a worker whose semantic busy state reads idle, and a steer that cannot be delivered surfaces through the ladder's ordinary stale wake, which names the dialog.
 The typed plane is not guarded, so an operator's own `fm-send --key Enter` still does what it says.

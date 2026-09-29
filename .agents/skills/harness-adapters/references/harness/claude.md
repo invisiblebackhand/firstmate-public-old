@@ -65,11 +65,8 @@ The controls are scoped to the launched process and never modify the captain's g
 
 ## Auto-mode setup offer
 
-Claude offers its built-in `/auto-mode-setup` to an auto-permission-mode worker at the end of a turn, as a dialog titled "Teach auto mode about your environment?" whose first, focused option is Yes.
-Accepting it starts a wizard that reads the project and the captain's recent Claude sessions and sends that material to a model, so Enter must never reach it.
-The spawn turns the offer off per launch through the same inline settings, and the steering doorbell never types into a Claude pane that shows the dialog; `launch_template()` in `../../../../../bin/fm-spawn.sh` owns the setting and the `bin/fm-task-inbox-lib.sh` header owns the guard.
-A stale wake that names the dialog is answered with Escape, which is Not now, never with Enter and never by running `/auto-mode-setup`.
-`../../../../../docs/verification/runtime-backends.md` "Claude auto-mode setup dialog markers" records the evidence and the drift guard that refreshes it.
+If a stale wake names Claude's auto-mode setup dialog, cancel it with Escape, never Enter or `/auto-mode-setup`.
+`launch_template()` in `../../../../../bin/fm-spawn.sh` owns the per-launch off switch, the `bin/fm-task-inbox-lib.sh` header owns the doorbell guard, and `../../../../../docs/verification/runtime-backends.md` "Claude auto-mode setup dialog markers" records the evidence.
 
 ## Task control channel
 
