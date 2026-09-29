@@ -906,6 +906,81 @@ The current pending-composer ring contract is owned by `bin/fm-task-inbox-lib.sh
 Kimi was not installed on the verification machine; its receive path is the same one-line-plus-shell contract, and the portable ladder and enqueue regressions in `tests/fm-task-inbox.test.sh` and `tests/fm-send-inbox.test.sh` cover every harness-independent half.
 This guard is the refresh command after any harness upgrade; it spends a small number of real tokens per installed harness, reports an absent harness explicitly, and refuses a run that verified nothing.
 
+## Claude auto-mode setup dialog markers
+
+Claude Code offers its built-in `/auto-mode-setup` command to an auto-permission-mode worker at the end of a turn, as a dialog titled "Teach auto mode about your environment?" whose first option, Yes, is focused.
+Accepting it starts a wizard that reads the project, the user's recent Claude sessions, and optionally shell history and other repositories, then sends that material to a model.
+`bin/fm-spawn.sh` owns the launch override and `bin/fm-task-inbox-lib.sh` owns the doorbell guard; this section records the vendor evidence for both.
+
+This evidence is static and was read on 2026-09-28 from Claude Code 2.1.284 on macOS arm64.
+The dialog was never opened and `/auto-mode-setup` was never run, because that is exactly the transcript scan these controls keep off; no session was started against a model.
+The strings the guard matches on are refreshed by a guard that reads only the installed binary and spends no model tokens:
+
+```sh
+tests/fm-claude-automode-dialog-live-e2e.test.sh
+```
+
+Observed output:
+
+```text
+# claude 2.1.284 (Claude Code) carries: Teach auto mode about your environment?
+# claude 2.1.284 (Claude Code) carries: Auto mode works better when it knows your environment
+# claude 2.1.284 (Claude Code) carries: Claude Code reads this project, your recent Claude sessions
+# claude 2.1.284 (Claude Code) carries: Scanning your repo and recent sessions
+ok - claude 2.1.284 (Claude Code) carries all 4 auto-mode setup dialog strings the doorbell guard matches on
+ok - claude 2.1.284 (Claude Code) carries the skillOverrides key and the auto-mode-setup skill name the per-launch off switch uses
+```
+
+The four strings are the offer's title, which the wizard's confirm step reuses, the offer's body, the confirm step's body, and the running scan's status row.
+Any one of them on screen is a positive verdict, so a release that rewords one string leaves the guard working; the drift guard still fails and names the version, so the reworded string is found instead of silently lost.
+
+The code around the title and the eligibility check was read from the same binary with fixed-string reads:
+
+```sh
+claude_bin=$(command -v claude)
+LC_ALL=C grep -a -o -b -F -- 'Teach auto mode about your environment?' "$claude_bin"
+dd if="$claude_bin" bs=1 skip=<offset minus 900> count=2300 2>/dev/null | LC_ALL=C tr -c '[:print:]\n' '?'
+```
+
+The title was found at byte offsets 72734732, 205622453, and 215962817, and the reads returned these excerpts, whose identifiers are that build's minified names, so only the strings and values are stable:
+
+```text
+Pt=[{label:"Yes",value:"accept"},{label:"Not now",value:"later"},{label:"Don't show again",value:"dismiss"}]
+Ft=()=>ht("later")
+Ht=e(Fe,{options:Pt,onChange:ht,onCancel:Ft})
+Mt=r(ge,{title:"Teach auto mode about your environment?",onCancel:ft,children:[gt,Ht]})
+var Eit=604800000,Dit=5,Bj=5;function BP(){if(!UY())return!1;if((ak()?.environment?.length??0)>0)return!1;let h=ce();if(h.numStartups<Dit)return!1;if((h.autoModeEnvSetup?.denials??0)<Bj)return!1;if(Oit())return!1;let v=h.autoModeEnvSetup;if(v?.dismissed)return!1;if(v?.dismissedAt&&Date.now()-v.dismissedAt<Eit)return!1;return!0}
+function WCe(h){return $gn()===!0&&h.toolPermissionContext.mode==="auto"&&!h.viewingAgentTaskId&&!dc()&&!Zn()&&!a.CLAUDE_BRIDGE_REATTACH_SESSION&&BP()}
+function UY(){return u0e()&&Qe().skillOverrides?.["auto-mode-setup"]!=="off"}
+["userSettings","projectSettings","localSettings","flagSettings","policySettings"]
+function fs(){let e=eIe(),n=bl();if(n.enabledSources?.allowed===e)return n.enabledSources.result;let t=new Set(e);t.add("flagSettings"),t.add("policySettings");let o=Bi.filter((i)=>t.has(i));return n.enabledSources={allowed:e,result:o},o}
+re="Teach auto mode about your environment?",ne="Claude Code reads this project, your recent Claude sessions, and optionally your shell history and other repositories. Claude analyzes this data and customizes auto mode to make better decisions."
+```
+
+What those excerpts establish:
+
+- The option order is Yes, Not now, Don't show again, so Enter on the freshly shown dialog accepts.
+- Escape on the option list and on the dialog both call the same handler with `"later"`, which is Not now and records a seven-day dismissal, never Yes.
+  This is why the guard's key is Escape and never Enter.
+- The offer is shown only in the `auto` permission mode, after at least five recorded auto-mode denials, at least five startups, no configured `autoMode.environment`, and no dismissal.
+  The denial counter is global to the user, so a worker that never denied anything can still be offered the dialog once a different session has.
+- The whole offer is gated by `skillOverrides["auto-mode-setup"]` read from the merged settings, whose enabled sources always include `flagSettings`.
+  `claude --help` describes `--settings <file-or-json>` as loading additional settings and says `--settings` still applies under `--restricted`, which is the layer the inline JSON populates.
+  The off switch is documented at https://code.claude.com/docs/en/auto-mode-config#turn-off-auto-mode-setup.
+- The wizard's confirm step reuses the title with a body that names the reads it performs, which is why the guard also treats the confirm body and the scan row as the dialog.
+
+### Known limits
+
+The screen layout was never observed, so the verdict rests on the four strings and not on any box drawing or option glyph.
+The portable regressions in `tests/fm-task-inbox.test.sh` and `tests/fm-send-inbox.test.sh` show each string sufficient alone, a title wrapped across rows still matching, a truncated title and auto mode's own status row not matching, and a dismissed dialog left in scrollback not blocking on the tested tmux path, which reads only the visible viewport.
+A pane that quotes one of the strings while its worker reads idle, such as a worker that has just printed this repository's own source, is treated as the dialog: the ring defers and Escape is sent.
+Nothing is typed in that case, Escape reaches only a worker whose semantic busy state reads idle, and a steer that cannot be delivered surfaces through the ladder's ordinary stale wake, which names the dialog.
+The typed plane is not guarded, so an operator's own `fm-send --key Enter` still does what it says.
+The remote secondmate leg shares the ring and prints the same notice, but no test drives that leg with a dialog on screen.
+
+Refresh this section after any Claude Code upgrade by running the guard above.
+When it fails, read the release's strings again without opening the dialog, update `fm_task_inbox_claude_dialog_markers`, and record the new version and result here.
+
 ## Gemini
 
 The Gemini crewmate adapter was verified on 2026-09-04 with gemini-cli 0.58.0 on Linux, Node v24.20.0, tmux 3.4.

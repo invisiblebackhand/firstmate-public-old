@@ -47,7 +47,8 @@
 # Re-ring ladder (fm_task_inbox_due_action): an unhandled message older than
 # FM_TASK_INBOX_GRACE_SECS is due one delivery attempt per grace period; an
 # attempt may ring or be skipped to protect another draft in a proven pending
-# composer; an unsubmitted copy of this doorbell is retried. After
+# composer or to keep Enter off a Claude auto-mode setup dialog; an
+# unsubmitted copy of this doorbell is retried. After
 # FM_TASK_INBOX_RING_MAX attempts without an acknowledgement it escalates. The
 # caller owns the busy and recovery-grade endpoint checks: a busy pane waits,
 # while a positively dead or missing endpoint skips delivery and the ladder and
@@ -62,6 +63,22 @@
 # Inbox paths containing bytes outside printable ASCII are unsupported. The
 # doorbell refuses them rather than sending terminal control bytes to a pane.
 #
+# Claude auto-mode setup dialog guard (fm_task_inbox_claude_dialog_guard, run by
+# every ring before it types): Claude Code offers /auto-mode-setup at the end
+# of a turn to an auto-mode worker, with Yes as the first, focused option, so a
+# doorbell's Enter would accept an offer whose wizard then scans the project's
+# recent session transcripts for a model request. A Claude target whose
+# visible screen shows the dialog, or the wizard or scan screen that follows
+# it, is therefore never typed into: the ring returns 4, the record stays
+# durable for the ladder's next attempt, and FM_TASK_INBOX_RING_NOTICE names
+# the task and what was done. Escape, the dialog's cancel key (Not now, never
+# Yes), is delivered through bin/fm-control.sh's interrupt verb only when the
+# worker's semantic busy state reads idle, because a busy turn that merely
+# displays the same words must not be interrupted. bin/fm-spawn.sh's per-launch
+# skillOverrides is the primary control; this guard backstops a worker launched
+# without it. docs/verification/runtime-backends.md "Claude auto-mode setup
+# dialog markers" records the evidence and the live guard that refreshes it.
+#
 # fm_task_inbox_ring requires bin/fm-backend.sh's dispatch (sourced below); the
 # other helpers are dependency-light. Sourced by bin/fm-send.sh, bin/fm-watch.sh,
 # and tests. No side effects on source beyond its sourced libraries.
@@ -71,15 +88,22 @@
 #   FM_TASK_INBOX_RING_MAX     default 3; delivery attempts before escalation
 
 _FM_TASK_INBOX_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Both dependencies are canonical lint roots in their own right. Keep them as
+# All dependencies are canonical lint roots in their own right. Keep them as
 # analysis boundaries here so ShellCheck's external-source traversal does not
 # recursively duplicate the full backend graph for every inbox consumer.
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-wake-lib.sh"
 # shellcheck source=/dev/null
 . "$_FM_TASK_INBOX_LIB_DIR/fm-backend.sh"
+# shellcheck source=/dev/null
+. "$_FM_TASK_INBOX_LIB_DIR/fm-control-lib.sh"
+# shellcheck source=/dev/null
+. "$_FM_TASK_INBOX_LIB_DIR/fm-busy-lib.sh"
 
 FM_TASK_INBOX_SCHEMA='fm-task-inbox.v1'
+# Set by every fm_task_inbox_ring call: empty unless the ring returned 4, when
+# it is one sentence naming the task, the dialog, and what the guard did.
+FM_TASK_INBOX_RING_NOTICE=''
 FM_TASK_INBOX_GRACE_DEFAULT=90
 FM_TASK_INBOX_RING_MAX_DEFAULT=3
 FM_TASK_INBOX_LOCK_WAIT_DEFAULT=5
@@ -270,14 +294,98 @@ fm_task_inbox_doorbell_line() {  # <record-path>
     "$quoted" "$quoted"
 }
 
-# Ring the doorbell, best-effort: one endpoint-liveness pre-check, one advisory
-# composer pre-check, then the backend's submit machinery with a minimal retry
-# budget, verdict discarded.
+# The strings a Claude screen renders while its auto-mode setup dialog is up:
+# the offer's title (the wizard's confirm step reuses it), the offer's body, the
+# wizard confirm step's body, and the running scan's status row. Any ONE of them
+# on screen is a positive verdict, so a vendor rewording of a single string
+# cannot blind the guard. They come from Claude Code 2.1.284's own UI strings,
+# never from provoking the dialog: opening it, or running /auto-mode-setup,
+# would send transcript-derived material to a model.
+# tests/fm-claude-automode-dialog-live-e2e.test.sh fails, naming the installed
+# version, when the title is no longer in the installed binary.
+fm_task_inbox_claude_dialog_markers() {
+  printf '%s\n' \
+    'Teach auto mode about your environment?' \
+    'Auto mode works better when it knows your environment' \
+    'Claude Code reads this project, your recent Claude sessions' \
+    'Scanning your repo and recent sessions'
+}
+
+# Print the first marker on <target>'s visible screen when task <id> in
+# <state-dir> records a claude harness, or fail when it does not, no marker is
+# there, or the screen cannot be read. Only a Claude target is checked: the
+# harness comes from the task's own meta, so a task with no meta or another
+# harness is never blamed for a dialog it cannot show. The viewport is read
+# where the backend has a verified viewport-only capture, so a dialog that was
+# dismissed and scrolled away is never mistaken for a live one; the others fall
+# back to the composer pre-check's bounded capture. Whitespace is folded first so
+# a marker the pane wrapped across rows still matches.
+fm_task_inbox_claude_dialog_shown() {  # <state-dir> <task-id> <backend> <target> [expected-label]
+  local meta=$1/$2.meta screen flat marker
+  [ -f "$meta" ] || return 1
+  [ "$(fm_control_harness_family "$(fm_meta_get "$meta" harness)" 2>/dev/null)" = claude ] || return 1
+  fm_backend_source "$3" || return 1
+  if fm_backend_visible_capture_supported "$3"; then
+    screen=$(fm_backend_visible_capture "$3" "$4" "${5:-}" 2>/dev/null) || return 1
+  else
+    screen=$(fm_backend_capture "$3" "$4" "$FM_COMPOSER_CAPTURE_LINES" "${5:-}" 2>/dev/null) || return 1
+  fi
+  flat=$(printf '%s' "$screen" | LC_ALL=C tr -s '[:space:]' ' ')
+  while IFS= read -r marker; do
+    case "$flat" in
+      *"$marker"*) printf '%s' "$marker"; return 0 ;;
+    esac
+  done < <(fm_task_inbox_claude_dialog_markers)
+  return 1
+}
+
+# The pre-typing guard behind fm_task_inbox_ring's return 4 (see the header).
+# Returns 0 when it applies - the record's task records a claude harness and its
+# screen shows a marker - after setting FM_TASK_INBOX_RING_NOTICE; nonzero
+# leaves the ring exactly as it was, including for an unreadable screen, which
+# stays advisory like the composer pre-check. The task comes from the record's
+# own inbox directory, so a record outside a <task>.inbox rings as before.
+# A busy or unclassified worker is not sent Escape: a dialog is only offered
+# between turns, so the same words on a working pane are quoted text (this
+# repository's own code and docs quote them), and Escape there would cancel the
+# turn. Nothing is typed in either case, so a worker whose pane merely quotes
+# the words while idle is deferred, spends ring budget, and surfaces through the
+# ladder's ordinary escalation rather than being interrupted.
+fm_task_inbox_claude_dialog_guard() {  # <backend> <target> <record-path> [expected-label]
+  local backend=$1 target=$2 rec=$3 label=${4:-} dir id state marker verdict out action
+  dir=$(cd "${rec%/*}" 2>/dev/null && pwd) || return 1
+  dir=${dir%/handled}
+  case "${dir##*/}" in
+    ?*.inbox) ;;
+    *) return 1 ;;
+  esac
+  id=${dir##*/}
+  id=${id%.inbox}
+  state=${dir%/*}
+  marker=$(fm_task_inbox_claude_dialog_shown "$state" "$id" "$backend" "$target" "$label") || return 1
+  verdict=$(fm_busy_classify_meta "$state/$id.meta" "$id" "$state" 2>/dev/null) || verdict=
+  verdict=${verdict%% *}
+  if [ "$verdict" != idle ]; then
+    action="Escape was not sent because the worker reads ${verdict:-unclassified} rather than idle"
+  elif out=$(FM_HOME="${FM_HOME:-${state%/*}}" FM_STATE_OVERRIDE="$state" \
+      "$_FM_TASK_INBOX_LIB_DIR/fm-control.sh" "$id" interrupt 2>&1 < /dev/null); then
+    action="Escape, the dialog's cancel key, was delivered through fm-control interrupt"
+  else
+    action="fm-control interrupt failed (${out##*$'\n'}), so the dialog may still be open"
+  fi
+  FM_TASK_INBOX_RING_NOTICE="task $id is showing Claude Code's auto-mode setup dialog (matched \"$marker\"), so no text and no Enter were sent; $action"
+}
+
+# Ring the doorbell, best-effort: one endpoint-liveness pre-check, the Claude
+# dialog guard, one advisory composer pre-check, then the backend's submit
+# machinery with a minimal retry budget, verdict discarded.
 # Returns 0 rang, 1 skipped because the composer PROVENLY holds pending text
 # other than our own doorbell (the watcher re-rings later), 2 the backend send
 # failed, 3 skipped because the endpoint is positively dead or missing (nothing
-# typed; recovery owns the record). No return value is delivery proof; the
-# acknowledgement move is the only delivery signal.
+# typed; recovery owns the record), 4 skipped because a Claude target's screen
+# shows its auto-mode setup dialog (nothing typed, no Enter; the watcher re-rings
+# later, and FM_TASK_INBOX_RING_NOTICE says what the guard did). No return value
+# is delivery proof; the acknowledgement move is the only delivery signal.
 # The skip is deliberately narrow: only an exact `pending` verdict can defer,
 # because there our Enter could submit someone's real half-typed content.
 # `pending-unproven` and `unknown` still ring - the worst outcome is a garbled
@@ -290,11 +398,16 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # a lost first Enter gets one confirmed retry.
 fm_task_inbox_ring() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} line cstate verdict
+  # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+  FM_TASK_INBOX_RING_NOTICE=''
   case "$(fm_backend_agent_state "$backend" "$target" 2>/dev/null || true)" in
     dead|missing) return 3 ;;
   esac
   if ! line=$(fm_task_inbox_doorbell_line "$rec"); then
     return 2
+  fi
+  if fm_task_inbox_claude_dialog_guard "$backend" "$target" "$rec" "$label"; then
+    return 4
   fi
   cstate=$(fm_backend_composer_state "$backend" "$target" "$label" 2>/dev/null) || cstate=unknown
   case "$cstate" in
@@ -416,10 +529,11 @@ EOF
   printf 'ring %s' "$oldest"
 }
 
-# Advance the ladder after a delivery attempt. A failed ring or a composer-
-# protected skip still consumes budget so neither an unreadable pane nor a
-# permanently blocked composer can retry silently forever. A positively dead or
-# missing endpoint never enters the ladder: the watcher escalates it directly.
+# Advance the ladder after a delivery attempt. A failed ring, a composer-
+# protected skip, or a dialog-guarded skip still consumes budget so neither an
+# unreadable pane nor a permanently blocked composer or dialog can retry
+# silently forever. A positively dead or missing endpoint never enters the
+# ladder: the watcher escalates it directly.
 # A concurrently removed inbox is a successful no-op; otherwise failure means
 # the caller must surface the unwritable ladder while the record remains
 # unhandled.

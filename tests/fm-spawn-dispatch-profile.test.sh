@@ -1055,7 +1055,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}'" \
+  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},\"skillOverrides\":{\"auto-mode-setup\":\"off\"}}'" \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
@@ -1148,6 +1148,27 @@ assert_attribution_policy() {  # <launch-command> <what>
   assert_contains "$launch" '"sessionUrl":false' "$what launch does not silence the session URL"
 }
 
+# Claude Code offers /auto-mode-setup at the end of a turn to an auto-mode
+# worker once its global denial counter reaches 5, and the offer's first,
+# focused option is Yes, so a late steering Enter would accept it and open a
+# wizard whose scan sends transcript-derived material to a model. The
+# documented off switch is honored from an inline --settings JSON, so every
+# claude launch must carry it, and the JSON that now carries three controls
+# must still parse with the earlier two intact.
+assert_auto_mode_setup_off() {  # <launch-command> <what>
+  local launch=$1 what=$2 json
+  json=$(printf '%s' "$launch" | sed -n "s/.* --settings '\\([^']*\\)'.*/\\1/p")
+  [ -n "$json" ] || fail "$what launch carries no inline --settings JSON: $launch"
+  printf '%s' "$json" | jq -e . >/dev/null 2>&1 \
+    || fail "$what launch's inline --settings is not valid JSON: $json"
+  [ "$(printf '%s' "$json" | jq -r '.skillOverrides["auto-mode-setup"] // "absent"')" = off ] \
+    || fail "$what launch does not turn off the auto-mode-setup offer: $json"
+  [ "$(printf '%s' "$json" | jq -r '.feedbackDrafts // "absent"')" = off ] \
+    || fail "$what launch lost the feedbackDrafts control: $json"
+  [ "$(printf '%s' "$json" | jq -r '.attribution.sessionUrl | tostring')" = false ] \
+    || fail "$what launch lost the attribution policy: $json"
+}
+
 test_claude_task_launch_carries_control_channel_authority() {
   local rec id out status launch
   id=profile-claude-control-channel-z21
@@ -1238,6 +1259,85 @@ test_claude_secondmate_launch_carries_the_attribution_policy() {
   launch=$(cat "$LAUNCH_LOG")
   assert_attribution_policy "$launch" "claude secondmate"
   pass "a claude secondmate launch carries the attribution-off policy too"
+}
+
+test_claude_crewmate_launch_turns_off_the_auto_mode_setup_offer() {
+  local rec id out status launch
+  id=profile-claude-automode-z25
+  rec=$(make_spawn_case profile-claude-automode claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude crewmate spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_auto_mode_setup_off "$launch" "claude crewmate"
+  pass "a claude crewmate launch turns off the auto-mode setup offer through valid inline settings"
+}
+
+test_claude_scout_launch_turns_off_the_auto_mode_setup_offer() {
+  local rec id out status launch
+  id=profile-claude-automode-scout-z26
+  rec=$(make_spawn_case profile-claude-automode-scout claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout)
+  status=$?
+  expect_code 0 "$status" "claude scout spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_auto_mode_setup_off "$launch" "claude scout"
+  pass "a claude scout launch turns off the auto-mode setup offer too"
+}
+
+test_claude_secondmate_launch_turns_off_the_auto_mode_setup_offer() {
+  local rec id sm out status launch
+  id=profile-secondmate-automode-z27
+  rec=$(make_spawn_case profile-secondmate-automode claude "$id")
+  read_case_record "$rec"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate claude spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_auto_mode_setup_off "$launch" "claude secondmate"
+  pass "a claude secondmate launch turns off the auto-mode setup offer too"
+}
+
+# The offer is only ever shown in auto permission mode, so the launch shape a
+# captain who refuses bypass mode gets is the one that most needs the switch.
+test_claude_auto_permission_mode_launch_turns_off_the_auto_mode_setup_offer() {
+  local rec id out status launch
+  id=profile-claude-automode-auto-z28
+  rec=$(make_spawn_case profile-claude-automode-auto claude "$id")
+  read_case_record "$rec"
+  printf 'auto\n' > "$HOME_DIR/config/claude-permission-mode"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude spawn under claude-permission-mode=auto should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "claude --permission-mode auto --settings" \
+    "the auto-mode launch did not select --permission-mode auto"
+  assert_auto_mode_setup_off "$launch" "claude auto-permission-mode"
+  pass "a claude launch under config/claude-permission-mode=auto turns off the auto-mode setup offer"
+}
+
+test_non_claude_launch_carries_no_auto_mode_setup_override() {
+  local rec id out status launch
+  id=profile-codex-automode-z29
+  rec=$(make_spawn_case profile-codex-automode codex "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "codex spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_not_contains "$launch" "skillOverrides" \
+    "a non-claude launch must not receive the claude-specific settings overlay"
+  pass "non-claude harness launches do not receive the claude auto-mode setup override"
 }
 
 test_active_dispatch_profile_does_not_block_secondmate_launch() {
@@ -1576,7 +1676,7 @@ claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$2" "$3")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$2" "$3")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},\"skillOverrides\":{\"auto-mode-setup\":\"off\"}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 test_claude_permission_mode_bypass_matches_absent_launch() {
@@ -1720,6 +1820,11 @@ test_claude_secondmate_launch_omits_task_control_channel_authority
 test_claude_long_launch_is_delivered_intact
 test_claude_crewmate_launch_carries_the_attribution_policy
 test_claude_secondmate_launch_carries_the_attribution_policy
+test_claude_crewmate_launch_turns_off_the_auto_mode_setup_offer
+test_claude_scout_launch_turns_off_the_auto_mode_setup_offer
+test_claude_secondmate_launch_turns_off_the_auto_mode_setup_offer
+test_claude_auto_permission_mode_launch_turns_off_the_auto_mode_setup_offer
+test_non_claude_launch_carries_no_auto_mode_setup_override
 test_active_dispatch_profile_does_not_block_secondmate_launch
 
 echo "# all fm-spawn-dispatch-profile tests passed"

@@ -522,13 +522,15 @@ inbox_steer_escalate_unavailable() {  # <window> <task> <record>
 # as that same stale wake exactly once. If the attempt's ladder write fails while
 # its record remains unhandled, that unwritable state surfaces through the same
 # stale path instead of silently re-ringing forever; acknowledgement or teardown
-# still makes the race quiet. The attempt is data-plane typing or a
-# composer-protected skip, never a wake, so normal retries keep the watcher
-# blocking. Runs for secondmates
+# still makes the race quiet. The attempt is data-plane typing, a composer-
+# protected skip, or a Claude auto-mode setup dialog skip (the ring returns 4
+# with its notice, which the triage log keeps), never a wake, so normal retries
+# keep the watcher blocking. A stale wake whose pane still shows that dialog
+# names it, since no doorbell may answer it. Runs for secondmates
 # too: their pane-staleness exemption is about quiet panes being healthy,
 # while an unacknowledged instruction past the ladder is a stuck steer.
 inbox_steer_check() {  # <window> <task>
-  local w=$1 task=$2 action verb rec count tail40 reason ring_rc backend agent_state
+  local w=$1 task=$2 action verb rec count tail40 reason ring_rc backend agent_state cause dialog
   action=$(fm_task_inbox_due_action "$STATE" "$task") || return 0
   verb=${action%% *}
   [ "$verb" != quiet ] || return 0
@@ -571,10 +573,14 @@ inbox_steer_check() {  # <window> <task>
           wake "$reason"
         fi
       fi
-      triage_log "steer-inbox delivery attempt: $task ${rec##*/} result=$ring_rc"
+      triage_log "steer-inbox delivery attempt: $task ${rec##*/} result=$ring_rc${FM_TASK_INBOX_RING_NOTICE:+ ($FM_TASK_INBOX_RING_NOTICE)}"
       ;;
     escalate)
-      reason="stale: $w (unread firstmate instruction: $rec still unhandled after $count doorbell delivery attempts with an idle pane; inspect the worker)"
+      cause='inspect the worker'
+      if dialog=$(fm_task_inbox_claude_dialog_shown "$STATE" "$task" "$backend" "$w" "$(window_label "$w")"); then
+        cause="its screen shows Claude Code's auto-mode setup dialog (matched \"$dialog\"), which no doorbell may answer, so inspect the worker and cancel the dialog with Escape, never Enter"
+      fi
+      reason="stale: $w (unread firstmate instruction: $rec still unhandled after $count doorbell delivery attempts with an idle pane; $cause)"
       if [ ! -d "${rec%/*}" ] || [ ! -f "$rec" ]; then
         fm_task_inbox_due_action "$STATE" "$task" >/dev/null || true
         return 0
