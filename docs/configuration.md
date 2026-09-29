@@ -1202,6 +1202,9 @@ The live API and rule-match evidence, plus the offline resolver and monitor cove
 It uses the `TYPESAFE_API_KEY` key but does not use the resolver's `typed_resolution` switch; it is inert when the key is absent.
 It makes the unmetered `GET /v1/models` request and reports a changed `jev-latest.release_date`, with the required reminder to replay the dispatch tests before changing a pinned model.
 The external Claude Code compact-adviser plugin has no model setting, so it stays on the moving `jev-latest` alias by default, and this alias-move alert covers it.
+The request times out after 10 seconds, well inside the watcher's `FM_CHECK_TIMEOUT` (default 30), because the listing intermittently takes about 5 seconds.
+A transport failure or non-200 reply is silent on the first failed poll, then reported on the second and every later consecutive failed poll; a gitignored `state/` record tracks the count, and any 200 reply resets it.
+Other failures, including a malformed 200 response, are reported on their first occurrence.
 It also sums valid input-token metering from that home's resolver ledger, including calls whose answers were later rejected conservatively, at the documented price of USD 0.042 per million input tokens and alerts when recorded local usage reaches USD 10 in the current UTC month or USD 1 in the current UTC calendar day.
 The spend alert covers only resolver calls recorded in this home's own ledger; it cannot see the compact-adviser plugin, which records no Jev spend, or any other home using the same key, so it is a floor on account spend rather than the account total.
 The TypeSafe console remains the account-wide authority for the USD 10 monthly threshold.
@@ -1224,7 +1227,7 @@ This section is the single owner of the standard contract for any Jev consumer.
 1. Opt in only when a key is present, and leave the caller's ordinary path unchanged when it is absent.
 2. Keep the key in process memory or a file-descriptor header, never in argv, URLs, or logs.
 3. Pin a versioned model where behavior feeds a tuned threshold, and record the answering model on every model call.
-4. Bound each request with a hard timeout of 2 seconds for interactive or hook paths and 5 seconds for command-line paths.
+4. Bound each request with a hard timeout of 2 seconds for interactive or hook paths and 5 seconds for command-line paths, except the monitor's models-listing check, which is bounded at 10 seconds for watcher polling; every other request, including every evaluation call, keeps the 2-second or 5-second bound.
 5. Validate the complete response shape before use; for a Choice answer, that includes the offered options, probabilities, confidence, and non-negative usage fields.
 6. Treat every API, timeout, malformed-response, or contradictory-response failure as the conservative path, with at most one diagnostic line.
 7. Do not retry interactive or hook work inside a call, and limit batch or command-line retries to two 429 or 529 retries that honor `retry-after`.
