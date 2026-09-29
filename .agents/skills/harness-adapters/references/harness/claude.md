@@ -63,6 +63,14 @@ Styled capture stays internal to the boolean detector; `fm-peek` and model-facin
 The spawn disables Claude's `/bug` and `/feedback` model-drafted feedback flow for every Claude worker and secondmate, preventing a fleet-launched agent from queuing or submitting a bug report on the captain's behalf.
 The controls are scoped to the launched process and never modify the captain's global Claude settings; `launch_template()` in `../../../../../bin/fm-spawn.sh` owns their exact mechanics and defense-in-depth rationale.
 
+## Auto-mode setup offer
+
+Claude offers its built-in `/auto-mode-setup` to an auto-permission-mode worker at the end of a turn, as a dialog titled "Teach auto mode about your environment?" whose first, focused option is Yes.
+Accepting it starts a wizard that reads the project and the captain's recent Claude sessions and sends that material to a model, so Enter must never reach it.
+The spawn turns the offer off per launch through the same inline settings, and the steering doorbell never types into a Claude pane that shows the dialog; `launch_template()` in `../../../../../bin/fm-spawn.sh` owns the setting and the `bin/fm-task-inbox-lib.sh` header owns the guard.
+A stale wake that names the dialog is answered with Escape, which is Not now, never with Enter and never by running `/auto-mode-setup`.
+`../../../../../docs/verification/runtime-backends.md` "Claude auto-mode setup dialog markers" records the evidence and the drift guard that refreshes it.
+
 ## Task control channel
 
 A Claude task worker's launch brief and Firstmate steering-inbox messages arrive as file-shaped content that is otherwise indistinguishable from indirect prompt injection.

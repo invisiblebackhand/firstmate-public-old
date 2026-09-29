@@ -25,6 +25,10 @@
 #  10. An empty or whitespace-only text steer is refused before anything is
 #      marked, recorded, or typed - on the marked secondmate path that means
 #      no marker-only record and no pending-reply expectation.
+#  11. A Claude worker parked at its auto-mode setup dialog is never typed
+#      into: the steer is still recorded and sent, Escape reaches an idle
+#      worker only, the stderr notice names the task and the dialog, and a
+#      later steer rings normally once the dialog is gone.
 # Every case below that passes a literal `$...` message quotes it on purpose
 # (the point is sending an unexpanded `$` line), so SC2016 is disabled.
 # shellcheck disable=SC2016
@@ -32,6 +36,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/fixtures.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fixtures.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-marker-lib.sh"
 
@@ -40,7 +46,8 @@ SEND="$ROOT/bin/fm-send.sh"
 TMP_ROOT=$(fm_test_tmproot fm-send-inbox)
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd)
 
-# Stub tmux: logs literal typed text to FM_SEND_LOG and lets the submit and
+# Stub tmux (this make_stubs replaces the one tests/fixtures.sh defines): logs
+# literal typed text to FM_SEND_LOG and lets the submit and
 # composer paths reach clean verdicts. FM_FAKE_TMUX_COMPOSER=pending renders a
 # composer visibly holding text; FM_FAKE_TMUX_SEND_FAIL=1 fails send-keys.
 make_stubs() { # <dir> -> echoes fakebin dir
@@ -411,6 +418,91 @@ test_empty_message_refused() {
   pass "fm-send: an empty or whitespace-only text steer refuses before marking, recording, or typing"
 }
 
+# One Claude task over the shared fake Claude pane (tests/fixtures.sh), parked
+# at its auto-mode setup dialog: the endpoint identity fm-control validates
+# before it presses a key, a semantic busy record (or none), and the dialog on
+# screen. The pane files in <dir>/pane record every byte and key that arrives.
+dialog_send_case() { # <name> <idle|none> -> echoes case dir
+  local name=$1 busy=$2 dir
+  dir="$TMP_ROOT/$name"
+  mkdir -p "$dir/home/state" "$dir/fakebin" "$dir/pane" "$dir/proj" "$dir/wt"
+  fm_test_fake_tmux_claude_pane "$dir/fakebin"
+  fm_write_meta "$dir/home/state/t1.meta" "window=fmses:fm-t1" "endpoint_task_id=t1" \
+    "worktree=$dir/wt" "project=$dir/proj" "harness=claude" "kind=ship" \
+    "mode=no-mistakes" "yolo=off"
+  [ "$busy" = none ] || "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 \
+    --state "$busy" --source claude-hook --event stop >/dev/null
+  printf '%s\n' '● done' '' '  Teach auto mode about your environment?' '' \
+    '  ❯ 1. Yes' '    2. Not now' >"$dir/pane/pane"
+  printf '%s\n' "$dir"
+}
+
+dialog_send() { # <case-dir> <err-file> <message>
+  run_send "$1" "$2" FM_FAKE_PANE_DIR="$1/pane" FM_CONTROL_POLL=0.01 \
+    FM_CONTROL_SETTLE_WAIT=0.05 -- t1 "$3"
+}
+
+test_claude_dialog_defers_the_doorbell_and_reports_it() {
+  local dir err rc body notice keys
+  dir=$(dialog_send_case dialog-defer idle)
+  err="$dir/send.err"
+  dialog_send "$dir" "$err" "please rebase onto main"
+  rc=$?
+  expect_code 0 "$rc" "a steer to a worker parked at Claude's dialog is still a sent steer"
+  body=$(record_body _ "$dir/home/state/t1.inbox/001.msg")
+  [ "$body" = "please rebase onto main" ] || fail "the steer was not durably recorded intact: $body"
+  [ ! -s "$dir/pane/literal" ] ||
+    fail "text was typed onto the dialog:"$'\n'"$(cat "$dir/pane/literal")"
+  keys=$(tr '\n' ' ' <"$dir/pane/keys" 2>/dev/null)
+  [ "$keys" = 'Escape ' ] || fail "only Escape, Not now, may reach the dialog, got: $keys"
+  notice=$(cat "$err")
+  assert_contains "$notice" "fm-send: doorbell not typed" "the notice should say the doorbell was skipped"
+  assert_contains "$notice" "task t1" "the notice should name the task"
+  assert_contains "$notice" "auto-mode setup dialog" "the notice should name the dialog"
+  assert_contains "$notice" "Escape, the dialog's cancel key, was delivered" \
+    "the notice should say what was pressed"
+  assert_contains "$notice" "$dir/home/state/t1.inbox/001.msg" "the notice should name the durable record"
+  assert_contains "$notice" "once the dialog is gone" "the notice should say when the watcher re-rings"
+  pass "fm-send inbox: a Claude auto-mode setup dialog skips the doorbell, cancels with Escape, and names itself"
+}
+
+test_claude_dialog_gets_no_key_when_the_worker_is_not_idle() {
+  local dir err rc
+  dir=$(dialog_send_case dialog-notidle none)
+  err="$dir/send.err"
+  dialog_send "$dir" "$err" "please rebase onto main"
+  rc=$?
+  expect_code 0 "$rc" "a steer to a worker parked at Claude's dialog is still a sent steer"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "the steer was not durably recorded"
+  [ ! -s "$dir/pane/literal" ] || fail "text was typed onto the dialog"
+  [ ! -s "$dir/pane/keys" ] ||
+    fail "a worker that does not read idle must not be sent a key: $(tr '\n' ' ' <"$dir/pane/keys")"
+  assert_contains "$(cat "$err")" "Escape was not sent" "the notice should say no key went out"
+  pass "fm-send inbox: a dialog on a worker that does not read idle is reported without pressing anything"
+}
+
+test_next_steer_rings_once_the_dialog_is_gone() {
+  local dir err rc keys
+  dir=$(dialog_send_case dialog-then-ring idle)
+  err="$dir/send.err"
+  touch "$dir/pane/dismiss-on-escape"
+  dialog_send "$dir" "$err" "first steer"
+  [ ! -e "$dir/pane/pane" ] || fail "the fake dialog should be gone after Escape, or this case proves nothing"
+  dialog_send "$dir" "$err" "second steer"
+  rc=$?
+  expect_code 0 "$rc" "the second send should succeed"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] && [ -f "$dir/home/state/t1.inbox/002.msg" ] ||
+    fail "both steers should be durably recorded:"$'\n'"$(ls "$dir/home/state/t1.inbox")"
+  assert_contains "$(cat "$dir/pane/submits")" "Firstmate instruction waiting" \
+    "the doorbell should be submitted once the dialog is gone"
+  case "$(cat "$err")" in
+  *"doorbell not typed"*) fail "the second send still reported a skipped doorbell:"$'\n'"$(cat "$err")" ;;
+  esac
+  keys=$(tr '\n' ' ' <"$dir/pane/keys")
+  [ "$keys" = 'Escape Enter ' ] || fail "expected Escape, then Enter only after the dialog was gone, got: $keys"
+  pass "fm-send inbox: the next steer rings normally once the dialog is gone, and the earlier record stays durable"
+}
+
 test_text_steer_rides_inbox
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence
@@ -424,3 +516,6 @@ test_post_enqueue_bookkeeping_failure_is_not_retryable
 test_meta_lock_contention_fails_bounded
 test_unwritable_inbox_fails_loudly
 test_empty_message_refused
+test_claude_dialog_defers_the_doorbell_and_reports_it
+test_claude_dialog_gets_no_key_when_the_worker_is_not_idle
+test_next_steer_rings_once_the_dialog_is_gone

@@ -226,6 +226,107 @@ SH
   chmod +x "$fakebin/tmux"
 }
 
+# fm_test_fake_tmux_claude_pane <fakebin>
+# Doorbell-world tmux: one Claude worker pane whose whole model is the files
+# under $FM_FAKE_PANE_DIR, so a test can drive the real fm-send, fm-control, and
+# fm_task_inbox_ring against a screen it chooses and read back exactly which
+# bytes reached the pane:
+#   command            the pane's foreground process name, the agent-state
+#                      classifier's input (default claude)
+#   pane               a static screen capture-pane prints verbatim; absent, the
+#                      pane renders an idle Claude composer holding `composer`
+#   composer           the composer's text: send-keys -l appends to it and Enter
+#                      submits it
+#   literal            every send-keys -l payload, one per line
+#   keys               every named key sent, one per line (Enter included)
+#   submits            `SUBMIT: <text>` for every Enter that submitted text
+#   scrollback         rows above the viewport, returned only by a capture that
+#                      starts above it (-S below -0), as tmux does
+#   dismiss-on-escape  when present, Escape deletes `pane`, so the screen falls
+#                      back to the idle composer as a cancelled dialog does
+#   fail-key           a key name whose send-keys exits 1
+#   capture-fail       when present, capture-pane exits 1
+#   windows            list-windows output (default fm-t1)
+fm_test_fake_tmux_claude_pane() {
+  local fakebin=$1
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+D=${FM_FAKE_PANE_DIR:?FM_FAKE_PANE_DIR is required}
+case "${1:-}" in
+  send-keys)
+    shift
+    literal=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -t) shift 2 ;;
+        -l) literal=1; shift ;;
+        *) break ;;
+      esac
+    done
+    payload=${1:-}
+    if [ "$literal" = 1 ]; then
+      printf '%s\n' "$payload" >> "$D/literal"
+      printf '%s' "$payload" >> "$D/composer"
+    else
+      if [ -f "$D/fail-key" ] && [ "$(cat "$D/fail-key")" = "$payload" ]; then
+        exit 1
+      fi
+      printf '%s\n' "$payload" >> "$D/keys"
+      case "$payload" in
+        Enter)
+          if [ -s "$D/composer" ]; then
+            printf 'SUBMIT: %s\n' "$(cat "$D/composer")" >> "$D/submits"
+            : > "$D/composer"
+          fi
+          ;;
+        Escape)
+          [ ! -f "$D/dismiss-on-escape" ] || rm -f "$D/pane"
+          ;;
+      esac
+    fi
+    exit 0 ;;
+  display-message)
+    for a in "$@"; do
+      case "$a" in
+        *cursor_y*) printf '2\n'; exit 0 ;;
+        *pane_current_command*) if [ -f "$D/command" ]; then cat "$D/command"; else printf claude; fi; printf '\n'; exit 0 ;;
+      esac
+    done
+    printf 'fakepane\n'; exit 0 ;;
+  capture-pane)
+    [ ! -f "$D/capture-fail" ] || exit 1
+    shift
+    start=
+    while [ $# -gt 0 ]; do
+      [ "$1" != -S ] || start=${2:-}
+      shift
+    done
+    if [ -f "$D/scrollback" ] && [ -n "$start" ] && [ "$start" != -0 ]; then
+      cat "$D/scrollback"
+    fi
+    if [ -f "$D/pane" ]; then
+      cat "$D/pane"
+      exit 0
+    fi
+    rule=$(printf '─%.0s' $(seq 64))
+    printf '● done\n%s\n' "$rule"
+    if [ -s "$D/composer" ]; then
+      fold -w 60 "$D/composer" | awk 'NR == 1 { print "❯ " $0; next } { print "  " $0 }'
+    else
+      printf '❯ \n'
+    fi
+    printf '%s\n  ? for shortcuts\n' "$rule"
+    exit 0 ;;
+  list-windows)
+    if [ -f "$D/windows" ]; then cat "$D/windows"; else printf 'fm-t1\n'; fi
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+}
+
 # fm_test_fake_ssh <fakebin> [name]
 # Records argv to FM_SSH_LOG, consumes stdin, exits FM_FAKE_SSH_RC (default 0).
 # Default name is fake-ssh so tests can point FM_SSH_BIN at it without
