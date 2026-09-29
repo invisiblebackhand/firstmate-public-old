@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Strip AI co-author trailers from a commit message, and
-# install that strip as a per-task git commit-msg hook for a fleet launch.
+# Strip AI co-author trailers from a commit message, and install per-task git
+# hook wrappers for a fleet launch.
 #
 # Usage:
 #   fm-git-strip-ai-trailers.sh <msgfile>
@@ -26,7 +26,8 @@
 #       names an executable absolute path, that guard is invoked with the same
 #       arguments and stdin git gave the hook. A non-zero exit refuses the push,
 #       a missing or non-executable configured guard also refuses the push, and
-#       a configured path that is not absolute refuses the push. When the file
+#       a configured path that is not absolute refuses the push. Failure to read
+#       the guard config or capture stdin also refuses the push. When the file
 #       is absent, empty, or names only whitespace, the wrapper behaves exactly
 #       as it does today.
 #

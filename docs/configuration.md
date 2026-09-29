@@ -890,11 +890,12 @@ The address selects the existing shared server; it does not authorize starting o
 
 ## Pre-push guard (config/pre-push-guard)
 
-The optional local, gitignored `config/pre-push-guard` installs a generic, opt-in pre-push guard for every fleet pane.
+The optional local, gitignored `config/pre-push-guard` enables a generic pre-push guard in fleet panes.
 When `bin/fm-git-strip-ai-trailers.sh install` runs, it resolves the effective firstmate config directory, bakes the absolute path to `pre-push-guard` into the generated `pre-push` wrapper, and the wrapper reads that file at push time.
 When the file exists and its first non-empty line names an executable absolute path, the wrapper runs that executable before chaining to the repository's own `pre-push` hook.
 The guard receives the same arguments and standard input that git gave the wrapper, so it can inspect the refs being pushed.
 A non-zero exit from the guard refuses the push, and a configured path that is missing, not executable, or not absolute also refuses the push rather than being silently skipped.
+Failure to read the guard config or capture git's ref input also refuses the push.
 When the file is absent, empty, or contains only whitespace, the wrapper behaves exactly as it did before this hook point existed.
 
 This is a public-template hook point, not a bundled guard.
