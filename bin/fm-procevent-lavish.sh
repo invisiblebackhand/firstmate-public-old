@@ -25,7 +25,8 @@
 #            plus a completeness verdict, follow before all annotations so a
 #            partial read is obvious. An unreadable content block is refused.
 #            Each annotation retains its element uid, selector, tag, text, and
-#            any nested target details. A non-choice freeform comment (`prompt`)
+#            any nested target details, including a text selection's range
+#            boundaries. A non-choice freeform comment (`prompt`)
 #            is printed as its own field even when a selector is also present
 #            and even when that comment matches the element text, so typed
 #            words are never dropped. A choice's typed note is presented
@@ -751,10 +752,19 @@ cmd_read() {
         print "element_selector: $selector\n";
         print "tag: $tag\n";
         if (ref($f->{target}) eq "HASH") {
-          for my $field (qw(type selector rowLabel columnLabel text)) {
+          for my $field (qw(type selector commonAncestorSelector rowLabel columnLabel text)) {
             next unless defined $f->{target}{$field};
             print "target_$field:\n";
             emit_body($f->{target}{$field});
+          }
+          for my $side (qw(start end)) {
+            next unless ref($f->{target}{$side}) eq "HASH";
+            for my $field (qw(selector path offset)) {
+              my $value = $f->{target}{$side}{$field};
+              next unless defined $value;
+              print "target_${side}_$field:\n";
+              emit_body(ref($value) eq "ARRAY" ? "[" . join(",", @$value) . "]" : $value);
+            }
           }
         }
         print "text:\n";
