@@ -29,6 +29,11 @@
 #      into: the steer is still recorded and sent, Escape reaches an idle
 #      worker only, the stderr notice names the task and the dialog, and a
 #      later steer rings normally once the dialog is gone.
+#  12. A Claude worker whose screen cannot be read is held the same way, but
+#      never sent Escape even when idle: the steer is still recorded and sent,
+#      the stderr notice names the task and says the screen could not be read,
+#      a later steer rings normally once it reads again, and the same
+#      unreadable screen on another harness is rung as before.
 # Every case below that passes a literal `$...` message quotes it on purpose
 # (the point is sending an unexpanded `$` line), so SC2016 is disabled.
 # shellcheck disable=SC2016
@@ -418,22 +423,25 @@ test_empty_message_refused() {
   pass "fm-send: an empty or whitespace-only text steer refuses before marking, recording, or typing"
 }
 
-# One Claude task over the shared fake Claude pane (tests/fixtures.sh), parked
-# at its auto-mode setup dialog: the endpoint identity fm-control validates
-# before it presses a key, a semantic busy record (or none), and the dialog on
-# screen. The pane files in <dir>/pane record every byte and key that arrives.
-dialog_send_case() { # <name> <idle|none> -> echoes case dir
-  local name=$1 busy=$2 dir
+# One task over the shared fake Claude pane (tests/fixtures.sh), parked at its
+# auto-mode setup dialog: the endpoint identity fm-control validates before it
+# presses a key, a semantic busy record (or none), and the dialog on screen.
+# `unreadable` leaves the dialog up but makes the pane's capture fail, the
+# hazard a screen nothing can read hides. The pane files in <dir>/pane record
+# every byte and key that arrives.
+dialog_send_case() { # <name> <idle|none> [harness] [dialog|unreadable] -> echoes case dir
+  local name=$1 busy=$2 harness=${3:-claude} screen=${4:-dialog} dir
   dir="$TMP_ROOT/$name"
   mkdir -p "$dir/home/state" "$dir/fakebin" "$dir/pane" "$dir/proj" "$dir/wt"
   fm_test_fake_tmux_claude_pane "$dir/fakebin"
   fm_write_meta "$dir/home/state/t1.meta" "window=fmses:fm-t1" "endpoint_task_id=t1" \
-    "worktree=$dir/wt" "project=$dir/proj" "harness=claude" "kind=ship" \
+    "worktree=$dir/wt" "project=$dir/proj" "harness=$harness" "kind=ship" \
     "mode=no-mistakes" "yolo=off"
   [ "$busy" = none ] || "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 \
     --state "$busy" --source claude-hook --event stop >/dev/null
   printf '%s\n' '● done' '' '  Teach auto mode about your environment?' '' \
     '  ❯ 1. Yes' '    2. Not now' >"$dir/pane/pane"
+  [ "$screen" != unreadable ] || touch "$dir/pane/capture-fail"
   printf '%s\n' "$dir"
 }
 
@@ -503,6 +511,70 @@ test_next_steer_rings_once_the_dialog_is_gone() {
   pass "fm-send inbox: the next steer rings normally once the dialog is gone, and the earlier record stays durable"
 }
 
+test_claude_unreadable_screen_holds_the_doorbell_and_reports_it() {
+  local busy dir err rc body notice
+  for busy in idle none; do
+    dir=$(dialog_send_case "unreadable-defer-$busy" "$busy" claude unreadable)
+    err="$dir/send.err"
+    dialog_send "$dir" "$err" "please rebase onto main"
+    rc=$?
+    expect_code 0 "$rc" "$busy: a steer to a worker whose screen cannot be read is still a sent steer"
+    body=$(record_body _ "$dir/home/state/t1.inbox/001.msg")
+    [ "$body" = "please rebase onto main" ] || fail "$busy: the steer was not durably recorded intact: $body"
+    [ ! -s "$dir/pane/literal" ] ||
+      fail "$busy: text was typed onto a screen nothing could read:"$'\n'"$(cat "$dir/pane/literal")"
+    [ ! -s "$dir/pane/keys" ] ||
+      fail "$busy: no key, Enter and Escape included, may reach a screen nothing could read, got: $(tr '\n' ' ' <"$dir/pane/keys")"
+    notice=$(cat "$err")
+    assert_contains "$notice" "fm-send: doorbell not typed" "$busy: the notice should say the doorbell was skipped"
+    assert_contains "$notice" "task t1" "$busy: the notice should name the task"
+    assert_contains "$notice" "screen could not be read" "$busy: the notice should say the screen could not be read"
+    assert_contains "$notice" "no text, no Enter, and no Escape were sent" "$busy: the notice should say nothing was sent"
+    assert_contains "$notice" "$dir/home/state/t1.inbox/001.msg" "$busy: the notice should name the durable record"
+    assert_contains "$notice" "once the screen can be read" "$busy: the notice should say when the watcher re-rings"
+    assert_not_contains "$notice" "auto-mode setup dialog" "$busy: nobody saw a dialog, so the notice must not name one"
+  done
+  pass "fm-send inbox: a Claude screen nothing could read skips the doorbell without pressing any key, even for an idle worker"
+}
+
+test_next_steer_rings_once_the_screen_is_readable() {
+  local dir err rc keys
+  dir=$(dialog_send_case unreadable-then-ring idle claude unreadable)
+  err="$dir/send.err"
+  dialog_send "$dir" "$err" "first steer"
+  [ ! -s "$dir/pane/literal" ] || fail "the first steer was typed onto a screen nothing could read"
+  rm -f "$dir/pane/capture-fail" "$dir/pane/pane"
+  dialog_send "$dir" "$err" "second steer"
+  rc=$?
+  expect_code 0 "$rc" "the second send should succeed"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] && [ -f "$dir/home/state/t1.inbox/002.msg" ] ||
+    fail "both steers should be durably recorded:"$'\n'"$(ls "$dir/home/state/t1.inbox")"
+  assert_contains "$(cat "$dir/pane/submits")" "Firstmate instruction waiting" \
+    "the doorbell should be submitted once the screen reads again"
+  case "$(cat "$err")" in
+  *"doorbell not typed"*) fail "the second send still reported a skipped doorbell:"$'\n'"$(cat "$err")" ;;
+  esac
+  keys=$(tr '\n' ' ' <"$dir/pane/keys")
+  [ "$keys" = 'Enter ' ] || fail "expected only the doorbell's Enter and never Escape, got: $keys"
+  pass "fm-send inbox: the next steer rings normally once the screen reads again, and the earlier record stays durable"
+}
+
+test_unreadable_screen_still_rings_a_non_claude_target() {
+  local dir err rc
+  dir=$(dialog_send_case unreadable-codex none codex unreadable)
+  err="$dir/send.err"
+  dialog_send "$dir" "$err" "please rebase onto main"
+  rc=$?
+  expect_code 0 "$rc" "a steer to a non-Claude worker whose screen cannot be read should still be sent"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "the steer was not durably recorded"
+  assert_contains "$(cat "$dir/pane/literal")" "Firstmate instruction waiting" \
+    "the non-Claude harness's doorbell should still be typed"
+  case "$(cat "$err")" in
+  *"doorbell not typed"*) fail "a non-Claude harness's doorbell was held:"$'\n'"$(cat "$err")" ;;
+  esac
+  pass "fm-send inbox: an unreadable screen on a non-Claude harness is rung as before"
+}
+
 test_text_steer_rides_inbox
 test_multiline_steer_is_legal
 test_resend_enqueues_new_sequence
@@ -519,3 +591,6 @@ test_empty_message_refused
 test_claude_dialog_defers_the_doorbell_and_reports_it
 test_claude_dialog_gets_no_key_when_the_worker_is_not_idle
 test_next_steer_rings_once_the_dialog_is_gone
+test_claude_unreadable_screen_holds_the_doorbell_and_reports_it
+test_next_steer_rings_once_the_screen_is_readable
+test_unreadable_screen_still_rings_a_non_claude_target

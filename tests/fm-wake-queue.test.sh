@@ -801,7 +801,9 @@ SH
 # Agent liveness matches the exact window name from list-windows. Printing
 # session:window makes the pane look missing, which is the leftover-row tests'
 # ring-unsafe path and must keep the parent alarm. These cases print fm-mate
-# and a claude foreground command so a proven-idle mate can actually be rung.
+# and a claude foreground command so a proven-idle mate can actually be rung,
+# and a lone prompt glyph as its screen: the doorbell holds a Claude pane whose
+# capture is blank instead of typing onto it.
 install_secondmate_alive_tmux() {  # <fakebin>
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'
@@ -809,7 +811,7 @@ install_secondmate_alive_tmux() {  # <fakebin>
 set -u
 case "${1:-}" in
   list-windows) printf '%s\n' 'fm-mate' ;;
-  capture-pane) exit 0 ;;
+  capture-pane) printf '❯\n'; exit 0 ;;
   display-message)
     case "$*" in
       *pane_current_command*) printf 'claude\n' ;;

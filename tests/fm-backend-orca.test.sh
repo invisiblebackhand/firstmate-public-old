@@ -774,7 +774,9 @@ test_peek_send_and_crew_state_route_through_orca_meta() {
     FM_ROOT_OVERRIDE="$neutral" FM_STATE_OVERRIDE="$state" FM_SEND_SETTLE=0 \
     "$ROOT/bin/fm-peek.sh" "fm-$id" 10 )
   [ "$out" = ready ] || fail "fm-peek should read through Orca metadata, got '$out'"
-  printf '{"ok":true,"result":{"send":{"handle":"term-io","accepted":true}}}\n' > "$RESP/2.out"
+  # The doorbell reads the Claude scout's screen first (the second Orca call),
+  # and holds the ring when that read shows nothing, so the response is a prompt.
+  printf '{"ok":true,"result":{"terminal":{"tail":["│ > │"]}}}\n' > "$RESP/2.out"
   printf '{"ok":true,"result":{"send":{"handle":"term-io","accepted":true}}}\n' > "$RESP/3.out"
   printf '{"ok":true,"result":{"terminal":{"tail":["│ > │"]}}}\n' > "$RESP/4.out"
   PATH="$FB:$PATH" FM_ORCA_LOG="$LOG" FM_ORCA_RESPONSES="$RESP" \
