@@ -178,14 +178,14 @@ SH
 
 # fm_test_fake_tmux_spawn_treehouse <fakebin>
 # Spawn-world tmux for suites that need the REAL treehouse to choose the slot.
-# It answers like fm_test_fake_tmux_spawn, except that a `treehouse get ...`
+# It answers like fm_test_fake_tmux_spawn, except that the `treehouse get ...`
 # text line typed at the pane is actually run: synchronously, from
-# FM_FAKE_PANE_PATH (the directory the pane starts in), with the script named by
-# FM_FAKE_SUBSHELL standing in for the interactive shell treehouse opens. The
-# stand-in records where treehouse entered it in FM_FAKE_PANE_CWD_FILE, and
-# pane_current_path then reports that directory, as a real pane's cwd follows
-# treehouse's cd. FM_FAKE_TREEHOUSE_LOG, when set, receives each line run and the
-# treehouse output. See fm_test_treehouse_standin_shell for the stand-in.
+# FM_FAKE_PANE_PATH (the directory the pane starts in), as the pane's shell would
+# run it, with $SHELL set to FM_FAKE_SUBSHELL (fm_test_treehouse_standin_shell) so
+# the shell that ends up in the slot is the stand-in. pane_current_path reports the
+# directory that stand-in was entered in, as a real pane's cwd follows the shell
+# it runs, and FM_FAKE_PANE_PATH until then. FM_FAKE_TREEHOUSE_LOG, when set,
+# receives each line run and the treehouse output.
 fm_test_fake_tmux_spawn_treehouse() {
   local fakebin=$1
   cat > "$fakebin/tmux" <<'SH'
@@ -220,9 +220,9 @@ case "${1:-}" in
       esac
     done
     case "$payload" in
-      "treehouse get"*)
+      *"treehouse get"*)
         [ -z "${FM_FAKE_TREEHOUSE_LOG:-}" ] || printf 'run: %s\n' "$payload" >> "$FM_FAKE_TREEHOUSE_LOG"
-        ( cd "$FM_FAKE_PANE_PATH" && SHELL="$FM_FAKE_SUBSHELL" bash -c "$payload" ) \
+        ( cd "$FM_FAKE_PANE_PATH" && SHELL="${FM_FAKE_SUBSHELL:?}" bash -c "$payload" ) \
           >> "${FM_FAKE_TREEHOUSE_LOG:-/dev/null}" 2>&1 || true
         ;;
     esac
@@ -235,11 +235,11 @@ SH
 }
 
 # fm_test_treehouse_standin_shell <path>
-# Writes the script FM_FAKE_SUBSHELL names for fm_test_fake_tmux_spawn_treehouse.
-# Treehouse opens $SHELL inside the slot it hands out and returns the slot to the
-# pool when that shell exits. The stand-in only records where it was entered and
-# exits at once, so the slot is handed back exactly as it is once the worker that
-# held it has stopped running - the state a recorded slot is in after a reboot.
+# Writes the script FM_FAKE_SUBSHELL names for fm_test_fake_tmux_spawn_treehouse:
+# the shell a pane runs inside the slot Treehouse handed it. The stand-in only
+# records where it was entered and exits at once, so the slot is left exactly as
+# it is once the worker that held it has stopped running - the state a recorded
+# slot is in after a reboot.
 fm_test_treehouse_standin_shell() {
   local path=$1
   cat > "$path" <<'SH'

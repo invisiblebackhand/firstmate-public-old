@@ -192,6 +192,18 @@
 #   spawn_gen, a non-tmux backend, or an ambiguous field, still faces the
 #   validator and refuses.
 #
+# Returning a ship task's slot: a Treehouse pool slot holds the task's durable
+# lease, and the return never cleans or resets. Once the landed-work checks have
+# passed, teardown removes only Firstmate's own untracked leftovers (its hook files,
+# and anything untracked under .claude/, which the dirty check tolerates) and then
+# releases the lease with bin/fm-wake-lib.sh's fm_treehouse_slot_release, which owns
+# the contract: a plain `treehouse return` under the task's own holder label, which
+# Treehouse declines whenever anything else is uncommitted, confirmed from the pool's
+# status rather than the exit status. A refusal aborts teardown with the slot still
+# leased and its work intact. Only --force, which the captain's explicit discard
+# authorizes, a scout's declared-scratch copy, and a copy that is not a Treehouse
+# pool slot return with `treehouse return --force`, which cleans and resets.
+#
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
 # non-linked worktree, .git/index.lock) that makes `treehouse return --force` fail
@@ -1766,15 +1778,27 @@ cleanup_stale_lock_for_safety_check() {
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
 }
 
-# Return a worktree/home via `treehouse return --force`, tolerating a transient or
-# stale git index.lock left by a killed crew process. See the script header.
+# One return of a worktree/home: the guarded release of a ship task's lease when a
+# guard task id is given, otherwise `treehouse return --force`. Prints Treehouse's
+# output and returns non-zero when the slot was not returned.
+teardown_run_treehouse_return() {  # <dir> <cd-dir> [<guard-task-id>]
+  if [ -n "${3:-}" ]; then
+    fm_treehouse_slot_release "$2" "$1" "$3"
+  else
+    ( cd "$2" && treehouse return --force "$1" )
+  fi
+}
+
+# Return a worktree/home via `treehouse return --force`, or through the guarded
+# release when a guard task id is given, tolerating a transient or stale git
+# index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
-  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-}
+  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} guard_id=${5:-}
   local out lock attempt=0 max_retries lock_desc
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
-  if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+  if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" 2>&1); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
   fi
@@ -1799,7 +1823,7 @@ teardown_treehouse_return() {
     echo "teardown: $label return failed with transient git lock ($lock_desc); waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${max_retries})" >&2
     sleep "$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS"
 
-    if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+    if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" 2>&1); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
       return 0
@@ -1826,7 +1850,7 @@ teardown_treehouse_return() {
           return 1
         fi
       fi
-      if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+      if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" 2>&1); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0
@@ -2291,12 +2315,49 @@ teardown_live_slot_path() {
 }
 
 collect_local_firstmate_states() {
-  local record_state=$1
-  fm_local_firstmate_states "$record_state" || {
-    echo "REFUSED: $FM_LOCAL_FIRSTMATE_STATES_ERROR; nothing was changed" >&2
+  local record_state=$1 root home reg line child known existing i=0
+  local -a homes
+  TREEHOUSE_OWNER_STATES=("$record_state")
+  root=$(fm_firstmate_root_home "$FM_HOME") || {
+    echo "REFUSED: cannot resolve the root Firstmate home; nothing was changed" >&2
     return 1
   }
-  TREEHOUSE_OWNER_STATES=("${FM_LOCAL_FIRSTMATE_STATES[@]}")
+  homes=("$root")
+  while [ "$i" -lt "${#homes[@]}" ]; do
+    home=${homes[$i]}
+    i=$((i + 1))
+    known=0
+    for existing in "${TREEHOUSE_OWNER_STATES[@]}"; do
+      [ "$existing" != "$home/state" ] || known=1
+    done
+    [ "$known" = 1 ] || TREEHOUSE_OWNER_STATES+=("$home/state")
+    reg="$home/data/secondmates.md"
+    [ ! -e "$reg" ] && [ ! -L "$reg" ] && continue
+    [ -f "$reg" ] && [ ! -L "$reg" ] || {
+      echo "REFUSED: local Firstmate registry is unsafe at $reg; nothing was changed" >&2
+      return 1
+    }
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        "- "*)
+          secondmate_registry_parse_line "$line" || {
+            echo "REFUSED: malformed local Firstmate registry entry in $reg; nothing was changed" >&2
+            return 1
+          }
+          [ "$SECONDMATE_REGISTRY_REMOTE" -eq 0 ] || continue
+          child=$(canonical_existing_dir "$SECONDMATE_REGISTRY_HOME") || {
+            echo "REFUSED: registered local Firstmate home is unavailable: $SECONDMATE_REGISTRY_HOME; nothing was changed" >&2
+            return 1
+          }
+          known=0
+          for existing in "${homes[@]}"; do
+            [ "$existing" != "$child" ] || known=1
+          done
+          [ "$known" = 1 ] || homes+=("$child")
+          ;;
+      esac
+    done < "$reg"
+  done
 }
 
 require_exclusive_worktree_slot_record() {
@@ -3539,15 +3600,23 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
     "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  # Kills remaining processes in the worktree (including the agent), resets, returns
-  # to pool. treehouse resolves the pool from the working directory, so run it from
+  # Kills remaining processes in the worktree (including the agent) and returns it
+  # to the pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks
   # left by a killed crew process; see the script header for retry and stale-lock proof.
+  # A ship task's copy is released without ever being cleaned or reset: only what the
+  # checks above tolerate as Firstmate's own is removed, and anything else that is
+  # uncommitted makes Treehouse decline the return, which aborts teardown.
   post_lock_cleanup_check=
+  return_guard_id=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
+    if fm_treehouse_pool_slot "$PROJ" "$WT"; then
+      return_guard_id=$ID
+      git -C "$WT" clean -fdq -- .claude 2>/dev/null || true
+    fi
   fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
+  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" "$return_guard_id" || {
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
   }

@@ -279,8 +279,10 @@ test_spawn_tmux_window_construction() {
     "must disable allow-rename on the spawned window"
 
   # Bug 2 fix (b): treehouse-get and the worktree wait loop target the stable id.
-  assert_grep "send-keys -t @spawnwid treehouse get Enter" "$rec" \
-    "treehouse get must be sent to the stable window id"
+  assert_grep "send-keys -t @spawnwid sh -c 'slot=\$(treehouse get --lease --lease-holder \"\$1\")" "$rec" \
+    "the durable-lease treehouse get must be sent to the stable window id"
+  assert_grep " sh 'rec-win-gg7' Enter" "$rec" \
+    "the lease must be taken in the task's own name"
   assert_grep "display-message -p -t @spawnwid #{pane_current_path}" "$rec" \
     "the worktree wait loop must query the stable window id, not the name"
 
@@ -301,7 +303,9 @@ EOF
   assert_contains "$out" "spawned rec-pool-hh8" "non-root recording spawn did not report success"
   pool_hash=$(printf '%s' "$proj" | git -C "$proj" hash-object --stdin)
   pool_root="$TMP_ROOT/spawn-rec-xdg-state/firstmate/treehouse-pools/$pool_hash"
-  assert_grep "send-keys -t @spawnwid treehouse get --root '$pool_root' Enter" "$rec" \
+  assert_grep "treehouse get --lease --lease-holder \"\$1\" --root \"\$2\")" "$rec" \
+    "non-root spawn did not pass an explicit Treehouse pool root"
+  assert_grep " sh 'rec-pool-hh8' '$pool_root' Enter" "$rec" \
     "non-root spawn did not force its absolute isolated Treehouse pool"
 
   : > "$rec"
