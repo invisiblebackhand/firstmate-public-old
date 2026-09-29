@@ -156,7 +156,10 @@
 #   could later be released out from under its successor. A spawn that aborts
 #   while it still holds the allocation lock drops its own claim; an abort after
 #   metadata publication has released that lock leaves the claim in place, and
-#   the next spawn's claim replaces it.
+#   the next spawn's claim replaces it. Before that spawn runs `treehouse get` it
+#   also keeps every slot a task record still names out of the pool's reach, and
+#   a relaunch that reuses a pool slot takes the same lock to renew that slot's
+#   claim; bin/fm-wake-lib.sh states the recorded-slot contract and owns both.
 #   The local root is whatever bin/fm-wake-lib.sh's
 #   fm_firstmate_root_home resolves, so a home seeded from another machine anchors
 #   that lock itself rather than failing to resolve one;
@@ -1321,6 +1324,9 @@ spawn_abort_cleanup() {
     SPAWN_META_LOCK_HELD=0
     fm_lock_release "$SPAWN_META_LOCK" || true
   fi
+  # Stop the processes holding recorded slots out of reach of `treehouse get`
+  # before the project lock that serialized them is released.
+  fm_treehouse_release_holds
   # A spawn that aborts after claiming its slot but before its record survives
   # must not leave a claim naming a task no record describes. The release is a
   # read-then-remove, so it runs only while the project lock that wrote the
@@ -2939,7 +2945,15 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+# A relaunch that reuses a Treehouse slot renews that slot's claim, which is a
+# write under the same project lock a fresh spawn allocates under.
+SPAWN_RELAUNCH_SLOT=0
+if [ "$RELAUNCH" -eq 1 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] &&
+  fm_treehouse_pool_slot "$PROJ_ABS" "$RELAUNCH_WT"; then
+  SPAWN_RELAUNCH_SLOT=1
+fi
+if { [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; } ||
+  [ "$SPAWN_RELAUNCH_SLOT" -eq 1 ]; then
   SPAWN_TREEHOUSE_PROJECT_LOCK=$(fm_treehouse_project_lock_path "$PROJ_ABS") || {
     echo "error: could not resolve the shared Treehouse project lock for $PROJ_ABS" >&2
     exit 1
@@ -4136,6 +4150,15 @@ if [ "$RELAUNCH" -eq 1 ]; then
     fi
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
+  # The replacement agent runs in this copy, so renew the copy's claim exactly as
+  # a fresh spawn writes it. The copy is reused, never re-taken, so first prove it
+  # is still this task's; a slot another record or claim shows was reassigned
+  # refuses rather than putting a second agent in that task's copy.
+  if [ "$SPAWN_RELAUNCH_SLOT" -eq 1 ] &&
+    ! fm_treehouse_slot_renew_claim "$WT" "$ID" "$FM_HOME" "$RELAUNCH_META"; then
+    echo "error: refusing to relaunch task $ID into Treehouse slot $WT: $FM_TREEHOUSE_RENEW_ERROR; nothing was changed (reconcile the records with bin/fm-crew-state.sh $ID first)" >&2
+    exit 1
+  fi
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # Isolate a non-root home's project pool at acquisition; the resolver owns
   # the cross-clone collision rationale, the out-of-home-tree pool location,
@@ -4160,6 +4183,14 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
         exit 1
       }
       SPAWN_TREEHOUSE_GET_LINE="treehouse get --root $(shell_quote "$SPAWN_TREEHOUSE_POOL_ROOT")"
+    fi
+    # Keep every slot a task record still names out of reach of the get below:
+    # Treehouse reads a stopped task's slot as free and would hand it out and
+    # reset it. bin/fm-wake-lib.sh owns the contract and the proof of each hold;
+    # a hold it cannot prove refuses here, before Treehouse can reset anything.
+    if ! fm_treehouse_hold_recorded_slots "$PROJ_ABS" "${SPAWN_TREEHOUSE_POOL_ROOT:-}"; then
+      echo "error: $FM_TREEHOUSE_HOLD_ERROR; refusing to run treehouse get, which could hand a task's recorded slot to task $ID and reset it" >&2
+      exit 1
     fi
   fi
   spawn_send_text_line "$WT_TARGET" "$SPAWN_TREEHOUSE_GET_LINE"
@@ -4222,6 +4253,28 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+
+  # Treehouse has chosen, so nothing needs holding any longer. A slot that a
+  # record or live claim of another task still names means a hold failed in a way
+  # its proof did not foresee (or a record appeared since): stop before this task
+  # claims, or works in, a copy another task's records describe.
+  fm_treehouse_release_holds
+  if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
+    other_task=
+    other_rc=0
+    other_task=$(fm_treehouse_slot_recorded_by_other "$WT" "$STATE/$ID.meta") || other_rc=$?
+    case "$other_rc" in
+      0)
+        echo "error: Treehouse handed task $ID slot $WT, which task $other_task still records; refusing to launch a worker into a copy another task's records describe (the slot may already have been reset; inspect window $T)" >&2
+        exit 1
+        ;;
+      1) ;;
+      *)
+        echo "error: could not read the task records to confirm Treehouse slot $WT is not another task's; refusing to launch task $ID into it; inspect window $T" >&2
+        exit 1
+        ;;
+    esac
+  fi
 
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
   # the pane above records only a process lease (Treehouse's durable

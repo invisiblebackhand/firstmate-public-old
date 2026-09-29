@@ -196,10 +196,10 @@ new_case() {
   printf '%s\n' "$dir"
 }
 
-# add_ship_task <case-dir> <id> [harness] [session]
+# add_ship_task <case-dir> <id> [harness] [session] [worktree]
 add_ship_task() {
   local dir=$1 id=$2 harness=${3:-claude} ses=${4:-fmses}
-  local home="$dir/home" proj="$dir/proj" wt="$dir/wt"
+  local home="$dir/home" proj="$dir/proj" wt=${5:-$dir/wt}
   fm_git_worktree "$proj" "$wt" "task-$id"
   mkdir -p "$home/data/$id"
   cat > "$home/data/$id/brief.md" <<EOF
@@ -463,6 +463,86 @@ test_relaunch_from_linked_home_preserves_recorded_worktree() {
   assert_grep 'unfinished task work' "$dir/wt/task.txt" "relaunch discarded unfinished task work"
   [ ! -e "$fetch_head" ] || fail "relaunch fetched instead of preserving the recorded copy"
   pass "fm-control relaunch: a linked spawning home preserves committed and unfinished work in the recorded copy"
+}
+
+# A ship task whose copy is a Treehouse pool slot: <pool>/<slot>/<repo> beside
+# the pool's state file, the shape a real spawn records and
+# fm_treehouse_pool_slot recognizes. The slot is <case-dir>/pool/1/proj and its
+# slot-owner claim <case-dir>/pool/1/.fm-slot-owner.
+add_pool_slot_ship_task() {  # <case-dir> <id>
+  mkdir -p "$1/pool"
+  printf '{}\n' > "$1/pool/treehouse-state.json"
+  add_ship_task "$1" "$2" claude fmses "$1/pool/1/proj"
+}
+
+test_relaunch_renews_the_claim_on_the_pool_slot_it_reuses() {
+  local state dir id out rc claim
+  for state in absent own; do
+    id="rl-renew-$state"
+    dir=$(new_case "renew-$state" "$id")
+    add_pool_slot_ship_task "$dir" "$id"
+    claim="$dir/pool/1/.fm-slot-owner"
+    # The claim a task wrote itself, from a home it no longer runs in, and the
+    # absence of one (a slot taken before claims existed): both must end as the
+    # claim a fresh spawn would have written.
+    [ "$state" = absent ] || printf 'task=%s\nhome=%s\n' "$id" "$dir/old-home" > "$claim"
+    out=$(run_control "$dir" "$id" relaunch --note "recovering after a restart"); rc=$?
+    expect_code 0 "$rc" "a relaunch into its own pool slot with $state claim should succeed"$'\n'"$out"
+    assert_equals "task=$id"$'\n'"home=$dir/home" "$(cat "$claim" 2>/dev/null)" \
+      "the relaunched task's slot claim was not renewed as a fresh spawn writes it ($state)"
+    [ "$(meta_field "$dir" "$id" worktree)" = "$dir/pool/1/proj" ] \
+      || fail "the relaunch replaced the recorded slot ($state)"
+    assert_grep "Firstmate operational input waiting: read" "$dir/fake/literal" \
+      "the replacement should have been launched ($state)"
+  done
+  pass "fm-control relaunch: the pool slot a relaunch reuses is claimed for the task exactly as a fresh spawn claims it"
+}
+
+test_relaunch_refuses_a_pool_slot_that_was_reassigned() {
+  local variant dir id out rc claim before
+  for variant in claim record unreadable; do
+    id="rl-moved-$variant"
+    dir=$(new_case "moved-$variant" "$id")
+    add_pool_slot_ship_task "$dir" "$id"
+    claim="$dir/pool/1/.fm-slot-owner"
+    case "$variant" in
+      claim) printf 'task=newer\nhome=%s\n' "$dir/home" > "$claim" ;;
+      record) fm_write_meta "$dir/home/state/newer.meta" "kind=ship" "worktree=$dir/pool/1/proj" ;;
+      unreadable) mkdir "$claim" ;;
+    esac
+    printf 'zsh' > "$dir/fake/command"
+    before=$(cat "$dir/home/state/$id.meta")
+
+    out=$(run_spawn "$dir" "$id" --relaunch --harness claude); rc=$?
+
+    expect_code 1 "$rc" "a relaunch into a reassigned pool slot should refuse ($variant)"$'\n'"$out"
+    assert_contains "$out" "refusing to relaunch task $id into Treehouse slot" \
+      "the refusal should name the task and the slot ($variant)"
+    case "$variant" in
+      claim) assert_contains "$out" "reassigned to task newer" "the refusal should name the task that claimed the slot" ;;
+      record) assert_contains "$out" "also task newer's recorded worktree" "the refusal should name the task whose record names the slot" ;;
+      unreadable) assert_contains "$out" "claim cannot be read" "the refusal should say the claim could not be read" ;;
+    esac
+    [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch delivered launch bytes ($variant)"
+    assert_equals "$before" "$(cat "$dir/home/state/$id.meta")" "the refused relaunch changed the task record ($variant)"
+    case "$variant" in
+      claim) assert_equals "task=newer"$'\n'"home=$dir/home" "$(cat "$claim")" "the refused relaunch overwrote the other task's claim" ;;
+      unreadable) [ -d "$claim" ] || fail "the refused relaunch replaced the unreadable claim" ;;
+      record) assert_absent "$claim" "the refused relaunch claimed a slot another record names" ;;
+    esac
+  done
+  pass "fm-spawn relaunch: a pool slot another task's claim or record shows was reassigned is refused, not shared"
+}
+
+test_relaunch_of_a_copy_outside_a_pool_writes_no_claim() {
+  local dir out rc
+  dir=$(new_case plain-copy rl-plain)
+  add_ship_task "$dir" rl-plain claude
+  out=$(run_control "$dir" rl-plain relaunch --note "plain copy"); rc=$?
+  expect_code 0 "$rc" "a relaunch of a copy outside any pool should succeed"$'\n'"$out"
+  assert_absent "$dir/.fm-slot-owner" "a relaunch claimed a copy that is not a pool slot"
+  assert_absent "$dir/wt/.fm-slot-owner" "a relaunch left a claim inside a copy that is not a pool slot"
+  pass "fm-control relaunch: a copy that is not a Treehouse slot is relaunched without a claim"
 }
 
 test_relaunch_preserves_durable_task_metadata() {
@@ -1666,6 +1746,41 @@ test_direct_spawn_relaunch_participates_in_the_lifecycle_lock() {
 }
 
 # shellcheck disable=SC2031
+test_relaunch_into_a_pool_slot_waits_on_the_project_allocation_lock() {
+  local dir id out rc lock holder i=0 claim
+  id=rl-poollock
+  dir=$(new_case poollock "$id")
+  add_pool_slot_ship_task "$dir" "$id"
+  claim="$dir/pool/1/.fm-slot-owner"
+  printf 'zsh' > "$dir/fake/command"
+  lock=$(FM_HOME="$dir/home" bash -c '. "$1/bin/fm-wake-lib.sh" && fm_treehouse_project_lock_path "$2"' _ "$ROOT" "$dir/proj") \
+    || fail "could not resolve the project allocation lock"
+  # A live holder of the lock every allocation and slot return takes.
+  (
+    . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_try_acquire "$lock" || exit 1
+    sleep 30
+  ) &
+  holder=$!
+  while [ ! -e "$lock" ] && [ "$i" -lt 100 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -e "$lock" ] || { kill "$holder" 2>/dev/null; fail "could not stage a held allocation lock"; }
+
+  out=$(run_spawn "$dir" "$id" --relaunch --harness claude); rc=$?
+  kill "$holder" 2>/dev/null || true
+  wait "$holder" 2>/dev/null || true
+
+  expect_code 1 "$rc" "a relaunch into a pool slot should refuse while an allocation holds the project lock"
+  assert_contains "$out" "another Treehouse slot allocation or return is in progress" \
+    "the refusal should name the allocation in progress"
+  assert_absent "$claim" "a refused relaunch wrote a claim without the project lock"
+  [ -z "$(cat "$dir/fake/literal")" ] || fail "a contended relaunch must deliver no launch bytes"
+  pass "fm-spawn relaunch: renewing a pool slot's claim serializes with allocation on the project lock"
+}
+
+# shellcheck disable=SC2031
 test_promotion_participates_in_the_lifecycle_lock_before_metadata_resolution() {
   local dir out rc lock holder i=0
   dir=$(new_case promotelock rl29)
@@ -2389,6 +2504,9 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
+test_relaunch_renews_the_claim_on_the_pool_slot_it_reuses
+test_relaunch_refuses_a_pool_slot_that_was_reassigned
+test_relaunch_of_a_copy_outside_a_pool_writes_no_claim
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
@@ -2435,6 +2553,7 @@ test_secondmate_checkpoint_refuses_unreadable_child_state
 test_secondmate_checkpoint_ignores_a_vanished_scratch_find_walk
 test_concurrent_relaunch_is_refused
 test_direct_spawn_relaunch_participates_in_the_lifecycle_lock
+test_relaunch_into_a_pool_slot_waits_on_the_project_allocation_lock
 test_promotion_participates_in_the_lifecycle_lock_before_metadata_resolution
 test_spawn_relaunch_refuses_a_live_agent
 test_spawn_relaunch_refuses_a_symlinked_task_record_before_inspection
