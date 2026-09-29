@@ -1486,8 +1486,8 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
 # owner_started_at), which the worker exiting or a reboot lapsed, so a stopped
 # task's slot read as free and was handed out.
 #
-# The lease ends only when Firstmate returns the slot, and that return never cleans
-# or resets. fm_treehouse_slot_release owns the guarded return contract.
+# The lease ends only when Firstmate returns the slot.
+# fm_treehouse_slot_release owns the guarded return contract.
 # Only the operator's explicit discard (fm-teardown.sh --force) and a scout's
 # declared-scratch copy return with --force, which does clean and reset.
 #

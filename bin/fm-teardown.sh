@@ -192,14 +192,12 @@
 #   spawn_gen, a non-tmux backend, or an ambiguous field, still faces the
 #   validator and refuses.
 #
-# Returning a ship task's slot: a Treehouse pool slot holds the task's durable
-# lease, and the return never cleans or resets. Once the landed-work checks have
-# passed, teardown removes its own hook files and calls bin/fm-wake-lib.sh's
-# fm_treehouse_slot_release with .claude as permitted leftovers. That function owns
-# the ownership, cleanup, and return contract. A refusal aborts teardown with the
-# slot still leased and its work intact. Only --force, which the captain's explicit discard
-# authorizes, a scout's declared-scratch copy, and a copy that is not a Treehouse
-# pool slot return with `treehouse return --force`, which cleans and resets.
+# Returning a ship task's slot: after landed-work checks, teardown removes its
+# hook files and calls bin/fm-wake-lib.sh's fm_treehouse_slot_release with .claude
+# as permitted leftovers. That function owns the guarded release contract.
+# A refusal stops teardown without returning or resetting the slot. Explicit
+# discard (--force), a scout's declared-scratch copy, and a copy outside a
+# Treehouse pool instead use `treehouse return --force`, which cleans and resets.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
@@ -2391,8 +2389,8 @@ require_exclusive_task_worktree_slot() {
   require_exclusive_worktree_slot_record "$META" "$ID" "$STATE" "$slot"
 }
 
-# Positive slot ownership, read from the claim the task that took the slot wrote
-# into the slot itself (bin/fm-wake-lib.sh owns the claim and its states).
+# Positive slot ownership, read from the claim beside the checkout that the task
+# taking the slot wrote (bin/fm-wake-lib.sh owns the claim and its states).
 #
 # The record scan above proves that no OTHER task record names this slot. It
 # cannot prove that THIS record is not the stale one, because the task that took
