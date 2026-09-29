@@ -25,9 +25,56 @@ with_hooks_env() {  # <hooks-dir> <command...>
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$hooks "$@"
 }
 
+with_hooks_env_and_home() {  # <hooks-dir> <home> <command...>
+  local hooks=$1 home=$2
+  shift 2
+  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$hooks FM_HOME=$home "$@"
+}
+
 make_repo() {
   local dir=$1
   fm_git_init_commit "$dir"
+}
+
+setup_push_repo() {
+  local repo=$1
+  make_repo "$repo"
+  fm_git_add_origin "$repo" "$repo.origin.git"
+}
+
+make_firstmate_home() {
+  local home=$1
+  mkdir -p "$home/config"
+  printf '%s\n' "$home"
+}
+
+write_guard_pass() {  # <path> <record-dir>
+  cat >"$1" <<SH
+#!/usr/bin/env bash
+cat > "$2/guard-stdin.txt"
+exit 0
+SH
+  chmod 700 "$1"
+}
+
+write_guard_fail() {  # <path> <exit-code> <record-dir>
+  cat >"$1" <<SH
+#!/usr/bin/env bash
+cat > "$3/guard-stdin.txt"
+exit $2
+SH
+  chmod 700 "$1"
+}
+
+write_record_hook() {  # <path> <marker-prefix>
+  cat >"$1" <<SH
+#!/usr/bin/env bash
+printf 'ran\n' > "$2.ran"
+printf '%s\n' "\$*" > "$2.args"
+cat > "$2.stdin"
+exit 0
+SH
+  chmod 700 "$1"
 }
 
 test_cursor_trailer_does_not_reach_the_commit_object() {
@@ -245,6 +292,158 @@ test_strip_msgfile_alone_does_not_rewrite_author_fields() {
   pass "commit-msg file mode strips the trailer and keeps the subject"
 }
 
+test_pre_push_unconfigured_passes_through() {
+  local repo hooks home
+  repo="$TMP_ROOT/prepush-unconfigured"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-unconfigured"
+  home=$(make_firstmate_home "$TMP_ROOT/home-unconfigured")
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  mkdir -p "$repo/.git/hooks"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main || fail "push should succeed when guard is unconfigured"
+  [ -f "$repo/chained.ran" ] || fail "chained pre-push hook did not run"
+  pass "unconfigured pre-push wrapper chains the project hook without FM_HOME at push time"
+}
+
+test_pre_push_guard_pass_then_chain() {
+  local repo hooks home guard records
+  repo="$TMP_ROOT/prepush-pass"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-pass"
+  home=$(make_firstmate_home "$TMP_ROOT/home-pass")
+  records="$TMP_ROOT/guard-records-pass"
+  mkdir -p "$records"
+  guard="$TMP_ROOT/guard-pass.sh"
+  write_guard_pass "$guard" "$records"
+  printf '%s\n' "$guard" >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  mkdir -p "$repo/.git/hooks"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main || fail "push should succeed when guard passes"
+  [ -f "$records/guard-stdin.txt" ] || fail "guard did not receive stdin"
+  [ -f "$repo/chained.ran" ] || fail "chained pre-push hook did not run"
+  pass "configured guard passes and the chained hook still runs without FM_HOME at push time"
+}
+
+test_pre_push_guard_refusal() {
+  local repo hooks home guard records rc
+  repo="$TMP_ROOT/prepush-refuse"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-refuse"
+  home=$(make_firstmate_home "$TMP_ROOT/home-refuse")
+  records="$TMP_ROOT/guard-records-refuse"
+  mkdir -p "$records"
+  guard="$TMP_ROOT/guard-refuse.sh"
+  write_guard_fail "$guard" 7 "$records"
+  printf '%s\n' "$guard" >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  mkdir -p "$repo/.git/hooks"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main; rc=$?
+  [ "$rc" -ne 0 ] || fail "push should fail when guard refuses"
+  [ ! -f "$repo/chained.ran" ] || fail "chained hook ran after guard refused"
+  [ -f "$records/guard-stdin.txt" ] || fail "guard did not receive stdin before refusing"
+  pass "configured guard refusal stops the push before chaining"
+}
+
+test_pre_push_missing_guard_refuses() {
+  local repo hooks home rc
+  repo="$TMP_ROOT/prepush-missing"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-missing"
+  home=$(make_firstmate_home "$TMP_ROOT/home-missing")
+  printf '%s\n' "$TMP_ROOT/does-not-exist.sh" >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  mkdir -p "$repo/.git/hooks"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main; rc=$?
+  [ "$rc" -ne 0 ] || fail "push should fail when configured guard is missing"
+  [ ! -f "$repo/chained.ran" ] || fail "chained hook ran after missing-guard refusal"
+  pass "missing configured guard refuses the push"
+}
+
+test_pre_push_stdin_reaches_guard_and_chain() {
+  local repo hooks home guard records
+  repo="$TMP_ROOT/prepush-stdin"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-stdin"
+  home=$(make_firstmate_home "$TMP_ROOT/home-stdin")
+  records="$TMP_ROOT/guard-records-stdin"
+  mkdir -p "$records"
+  guard="$TMP_ROOT/guard-stdin.sh"
+  write_guard_pass "$guard" "$records"
+  printf '%s\n' "$guard" >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  mkdir -p "$repo/.git/hooks"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main || fail "push should succeed"
+  [ -f "$records/guard-stdin.txt" ] || fail "guard did not receive stdin"
+  [ -f "$repo/chained.stdin" ] || fail "chained hook did not receive stdin"
+  diff -q "$records/guard-stdin.txt" "$repo/chained.stdin" >/dev/null || fail "guard and chained hook saw different stdin"
+  pass "pre-push stdin reaches both guard and chained hook"
+}
+
+test_pre_push_leading_blank_line_ignored() {
+  local repo hooks home guard records
+  repo="$TMP_ROOT/prepush-blank"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-blank"
+  home=$(make_firstmate_home "$TMP_ROOT/home-blank")
+  records="$TMP_ROOT/guard-records-blank"
+  mkdir -p "$records"
+  guard="$TMP_ROOT/guard-blank.sh"
+  write_guard_pass "$guard" "$records"
+  {
+    printf '\n\n'
+    printf '%s\n' "$guard"
+  } >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  mkdir -p "$repo/.git/hooks"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main || fail "push should succeed with leading blank lines in config"
+  [ -f "$records/guard-stdin.txt" ] || fail "guard did not run after leading blank lines were skipped"
+  [ -f "$repo/chained.ran" ] || fail "chained hook did not run"
+  pass "leading blank lines in pre-push-guard are skipped"
+}
+
+test_pre_push_relative_guard_refuses() {
+  local repo hooks home rc
+  repo="$TMP_ROOT/prepush-relative"
+  setup_push_repo "$repo"
+  hooks="$TMP_ROOT/hooks-prepush-relative"
+  home=$(make_firstmate_home "$TMP_ROOT/home-relative")
+  printf '%s\n' "./relative-guard.sh" >"$home/config/pre-push-guard"
+  FM_HOME="$home" "$STRIP" install "$hooks" "$repo" || fail "install should succeed"
+  mkdir -p "$repo/.git/hooks"
+  write_record_hook "$repo/.git/hooks/pre-push" "$repo/chained"
+  printf 'note\n' >>"$repo/README.md"
+  git -C "$repo" add README.md
+  git -C "$repo" commit -q -m 'change'
+  with_hooks_env "$hooks" git -C "$repo" push -q origin main; rc=$?
+  [ "$rc" -ne 0 ] || fail "push should fail when configured guard path is relative"
+  [ ! -f "$repo/chained.ran" ] || fail "chained hook ran after relative-path refusal"
+  pass "relative configured guard path refuses the push"
+}
+
 test_cursor_trailer_does_not_reach_the_commit_object
 test_human_coauthor_is_kept
 test_human_at_a_vendor_domain_is_kept
@@ -256,5 +455,12 @@ test_inherited_hookspath_env_does_not_decide_the_chain
 test_project_hook_generated_after_install_still_runs
 test_pane_hookspath_does_not_reroute_another_repository
 test_strip_msgfile_alone_does_not_rewrite_author_fields
+test_pre_push_unconfigured_passes_through
+test_pre_push_guard_pass_then_chain
+test_pre_push_guard_refusal
+test_pre_push_missing_guard_refuses
+test_pre_push_stdin_reaches_guard_and_chain
+test_pre_push_leading_blank_line_ignored
+test_pre_push_relative_guard_refuses
 
 echo "# all fm-git-strip-ai-trailers tests passed"

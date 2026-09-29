@@ -13,6 +13,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
+| Push guard for fleet panes | [Pre-push guard](#pre-push-guard-configpre-push-guard) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
 ## FM_HOME
@@ -886,6 +887,19 @@ When the file is absent, worker launches do not add a board address and retain t
 
 Malformed or unreadable values refuse the launch before the worker starts.
 The address selects the existing shared server; it does not authorize starting or stopping the server, and the Lavish startup crash remains a vendor-tool concern.
+
+## Pre-push guard (config/pre-push-guard)
+
+The optional local, gitignored `config/pre-push-guard` installs a generic, opt-in pre-push guard for every fleet pane.
+When `bin/fm-git-strip-ai-trailers.sh install` runs, it resolves the effective firstmate config directory, bakes the absolute path to `pre-push-guard` into the generated `pre-push` wrapper, and the wrapper reads that file at push time.
+When the file exists and its first non-empty line names an executable absolute path, the wrapper runs that executable before chaining to the repository's own `pre-push` hook.
+The guard receives the same arguments and standard input that git gave the wrapper, so it can inspect the refs being pushed.
+A non-zero exit from the guard refuses the push, and a configured path that is missing, not executable, or not absolute also refuses the push rather than being silently skipped.
+When the file is absent, empty, or contains only whitespace, the wrapper behaves exactly as it did before this hook point existed.
+
+This is a public-template hook point, not a bundled guard.
+The actual guard script, which might run `gitleaks` and enforce path, file-type, or size rules, lives in the owner's private dotfiles or tooling and is not part of firstmate.
+Because the guard path is usually machine-specific, `config/pre-push-guard` is local to each home and is not inherited into secondmate homes.
 
 ## Home brief include (config/brief-include.md)
 

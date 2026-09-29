@@ -19,6 +19,17 @@
 #       prefixes the pane with GIT_CONFIG_COUNT / GIT_CONFIG_KEY_0 /
 #       GIT_CONFIG_VALUE_0.
 #
+#       The pre-push wrapper optionally runs a configured guard before chaining.
+#       At install time the wrapper resolves the firstmate config directory,
+#       bakes the absolute path to pre-push-guard into the hook, and reads that
+#       file at push time. When the file exists and its first non-empty line
+#       names an executable absolute path, that guard is invoked with the same
+#       arguments and stdin git gave the hook. A non-zero exit refuses the push,
+#       a missing or non-executable configured guard also refuses the push, and
+#       a configured path that is not absolute refuses the push. When the file
+#       is absent, empty, or names only whitespace, the wrapper behaves exactly
+#       as it does today.
+#
 # WHY THIS EXISTS. Claude launches already carry attribution-off in their
 # per-launch --settings JSON. Cursor and other non-Claude runtimes inject a
 # Co-Authored-By trailer at the tooling layer AFTER the worker types a clean
@@ -162,6 +173,82 @@ fi
 EOF
 }
 
+# Resolve the absolute path to a file under the effective firstmate config
+# directory. FM_CONFIG_OVERRIDE wins, then FM_HOME/config, then the config
+# directory at the script's own repo root when no home is set. The returned
+# path may name a file that does not yet exist; the caller decides whether that
+# is an error.
+resolve_firstmate_config_file() {
+  local file=$1 config_dir
+  if [ -n "${FM_CONFIG_OVERRIDE:-}" ]; then
+    config_dir=$FM_CONFIG_OVERRIDE
+  elif [ -n "${FM_HOME:-}" ]; then
+    config_dir=$FM_HOME/config
+  else
+    config_dir=$(cd "$(dirname "$SELF")/.." && pwd -P)/config
+  fi
+  case "$config_dir" in
+  /*) ;;
+  *) config_dir=$(CDPATH='' cd -- "$config_dir" 2>/dev/null && pwd -P) || config_dir= ;;
+  esac
+  [ -n "$config_dir" ] || return 1
+  printf '%s\n' "$config_dir/$file"
+}
+
+# Body for the pre-push wrapper only. Git passes the list of refs being pushed
+# on stdin, so this wrapper must capture stdin when a guard runs so the chained
+# project hook still receives it. The absolute path to the guard config file is
+# baked in at install time so push-time behavior does not depend on FM_HOME or
+# FM_CONFIG_OVERRIDE being set in the hook environment. When no guard is
+# configured the wrapper avoids capturing stdin and runs the chained hook as
+# before.
+pre_push_chain_body() {
+  local ours=$1 guard_file=$2
+  cat <<EOF
+unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+guard_file=$(quote_for_hook "$guard_file")
+guard_path=
+stdin_tmp=
+if [ -s "\$guard_file" ]; then
+  guard_path=\$(sed -e '/^[[:space:]]*\$/d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*\$//' -e 'q' "\$guard_file")
+fi
+if [ -n "\${guard_path:-}" ]; then
+  case "\$guard_path" in
+  /*) ;;
+  *)
+    printf '%s\n' "error: pre-push guard path must be absolute: \$guard_path" >&2
+    exit 1
+    ;;
+  esac
+  if [ ! -x "\$guard_path" ]; then
+    printf '%s\n' "error: pre-push guard is configured but not executable: \$guard_path" >&2
+    exit 1
+  fi
+  stdin_tmp=\$(mktemp "\${TMPDIR:-/tmp}/fm-prepush-stdin.XXXXXX") || exit 1
+  cat >"\$stdin_tmp"
+  "\$guard_path" "\$@" <"\$stdin_tmp" || { rc=\$?; rm -f "\$stdin_tmp"; exit \$rc; }
+fi
+ours=$(quote_for_hook "$ours")
+name=\${0##*/}
+orig=\$(git rev-parse --path-format=absolute --git-path hooks) || { rm -f "\${stdin_tmp:-}"; exit 0; }
+if [ "\$orig" = "\$ours" ]; then
+  rm -f "\${stdin_tmp:-}"
+  exit 0
+fi
+if [ -x "\$orig/\$name" ]; then
+  if [ -n "\${stdin_tmp:-}" ] && [ -f "\$stdin_tmp" ]; then
+    "\$orig/\$name" "\$@" <"\$stdin_tmp"
+  else
+    "\$orig/\$name" "\$@"
+  fi
+  rc=\$?
+  rm -f "\${stdin_tmp:-}"
+  exit \$rc
+fi
+rm -f "\${stdin_tmp:-}"
+EOF
+}
+
 # Client-side hook names git invokes by name from core.hooksPath, per
 # githooks(5) in git 2.50. The receive-side names, the config-invoked
 # fsmonitor-watchman, and the git-p4 names are left out because git never looks
@@ -191,7 +278,7 @@ pre-merge-commit prepare-commit-msg post-commit pre-rebase post-checkout
 post-merge pre-push post-rewrite pre-auto-gc sendemail-validate'
 
 install_hooks() {
-  local hooks_dir=$1 wt=$2 name
+  local hooks_dir=$1 wt=$2 name pre_push_guard_file
   [ -n "$hooks_dir" ] && [ -n "$wt" ] || usage
   [ -d "$wt" ] || {
     echo "error: worktree is not a directory: $wt" >&2
@@ -207,6 +294,8 @@ install_hooks() {
   chmod 700 "$hooks_dir" 2>/dev/null || true
   hooks_dir=$(CDPATH='' cd -- "$hooks_dir" && pwd -P) || return 1
 
+  pre_push_guard_file=$(resolve_firstmate_config_file pre-push-guard) || pre_push_guard_file=
+
   write_executable "$hooks_dir/commit-msg" <<EOF
 #!/usr/bin/env bash
 set -u
@@ -215,11 +304,19 @@ $(runtime_chain_body "$hooks_dir")
 EOF
 
   for name in $FM_GIT_CLIENT_HOOKS; do
-    write_executable "$hooks_dir/$name" <<EOF
+    if [ "$name" = "pre-push" ]; then
+      write_executable "$hooks_dir/$name" <<EOF
+#!/usr/bin/env bash
+set -u
+$(pre_push_chain_body "$hooks_dir" "$pre_push_guard_file")
+EOF
+    else
+      write_executable "$hooks_dir/$name" <<EOF
 #!/usr/bin/env bash
 set -u
 $(runtime_chain_body "$hooks_dir")
 EOF
+    fi
   done
   chmod 500 "$hooks_dir"
 }
