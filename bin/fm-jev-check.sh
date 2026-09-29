@@ -9,6 +9,9 @@
 # `check` emits at most one line when jev-latest has a changed release date, this
 # Firstmate home's resolver ledger reaches USD 10 in the current UTC month or
 # USD 1 in the current UTC calendar day, or either check fails.
+# A models request that errors, times out, or returns a non-200 reply fails the
+# check only once two polls in a row fail, and any 200 reply resets that count.
+# Every other failure is reported the first time it happens.
 # The ledger is keyed by neither TypeSafe account nor API key and excludes other
 # Jev consumers.
 # TypeSafe's console is the account-wide USD 10/month authority; these are local
@@ -30,12 +33,15 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 STATE="$FM_HOME/state"
 ALIAS_RECORD="$STATE/.jev-monitor-alias"
 SPEND_RECORD="$STATE/.jev-monitor-spend"
+FAILURE_RECORD="$STATE/.jev-monitor-failures"
 CHECK_ID=jev-monitor
 CHECK_SHIM="$STATE/$CHECK_ID.check.sh"
 REGISTER_BIN="$SCRIPT_DIR/fm-check-register.sh"
 UNREGISTER_BIN="$SCRIPT_DIR/fm-check-unregister.sh"
 TS_BASE=https://api.typesafe.ai
-TS_TIMEOUT=2
+# One request must end well inside the watcher's FM_CHECK_TIMEOUT (default 30 seconds).
+TS_TIMEOUT=10
+FAILURES_BEFORE_ALERT=2
 PRICE_PER_INPUT_TOKEN=0.000000042
 
 # shellcheck source=bin/fm-env-lib.sh
@@ -85,6 +91,25 @@ append_finding() {
   fi
 }
 
+request_failed() {  # <http code>
+  local count=0 finding="Jev alias check failed: GET /v1/models returned $1"
+  if [ -e "$FAILURE_RECORD" ] || [ -L "$FAILURE_RECORD" ]; then
+    # A record that is not a count cannot vouch for earlier failures, so it alerts.
+    count=$FAILURES_BEFORE_ALERT
+    if record_read "$FAILURE_RECORD" && [[ $FM_JEV_RECORD =~ ^[1-9][0-9]{0,8}$ ]]; then
+      count=$FM_JEV_RECORD
+    fi
+  fi
+  count=$((count + 1))
+  if ! record_write "$FAILURE_RECORD" "$count"; then
+    # A failure that cannot be counted could never reach the threshold, so report it now.
+    append_finding "$finding"
+    append_finding 'Jev alias check failed: could not save request failure count'
+  elif [ "$count" -ge "$FAILURES_BEFORE_ALERT" ]; then
+    append_finding "$finding"
+  fi
+}
+
 check_alias() {
   local response headers http release previous
   response=$(mktemp) || { append_finding 'Jev alias check failed: mktemp'; return; }
@@ -93,10 +118,11 @@ check_alias() {
     -X GET "$TS_BASE/v1/models" -H @/dev/fd/3 \
     3< <(printf 'Authorization: Bearer %s\n' "$TYPESAFE_API_KEY_PRIVATE") 2>/dev/null) || http=000
   if [ "$http" != 200 ]; then
-    append_finding "Jev alias check failed: GET /v1/models returned $http"
     rm -f "$response" "$headers"
+    request_failed "$http"
     return
   fi
+  rm -f -- "$FAILURE_RECORD"
   if ! jq -e '
       def leap($year):
         ($year % 4 == 0 and $year % 100 != 0) or ($year % 400 == 0);
@@ -258,7 +284,7 @@ action_disarm() {
     printf 'fm-jev-check: could not unregister %s\n' "$CHECK_SHIM" >&2
     return 1
   fi
-  rm -f -- "$ALIAS_RECORD" "$SPEND_RECORD"
+  rm -f -- "$ALIAS_RECORD" "$SPEND_RECORD" "$FAILURE_RECORD"
   printf 'disarmed: state/%s.check.sh\n' "$CHECK_ID"
 }
 
