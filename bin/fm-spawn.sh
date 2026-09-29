@@ -4182,7 +4182,7 @@ if [ "$RELAUNCH" -eq 1 ]; then
         echo "warning: could not confirm task $ID's lease on Treehouse slot $WT ($FM_TREEHOUSE_SLOT_REASON); relaunching into the recorded copy" >&2
         ;;
       *)
-        echo "warning: task $ID's Treehouse slot $WT is not leased to it ($FM_TREEHOUSE_SLOT_REASON); Treehouse can hand it to another task while no worker runs in it, and the installed Treehouse cannot lease an existing slot" >&2
+        echo "warning: task $ID's Treehouse slot $WT stays unprotected ($FM_TREEHOUSE_SLOT_REASON); Treehouse can hand it to another task and reset it whenever no worker runs in it, until this task is cleaned up and respawned" >&2
         ;;
     esac
   fi

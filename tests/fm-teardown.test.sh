@@ -918,11 +918,14 @@ test_pool_slot_teardown_releases_when_treehouse_cannot_report_leases() {
   rc=$?
   set -e
 
-  expect_code 0 "$rc" "pool-blind: a landed task should be torn down without a pool status"$'\n'"$(cat "$case_dir/stderr")"
-  grep -Fxq "return $slot" "$case_dir/treehouse.log" \
-    || fail "pool-blind: teardown did not return the slot with a plain return: $(cat "$case_dir/treehouse.log")"
-  ! grep -q -- '--force' "$case_dir/treehouse.log" || fail "pool-blind: teardown forced the return"
-  pass "a pool slot is still released with a plain return where Treehouse cannot report leases"
+  expect_code 1 "$rc" "pool-blind: teardown should stop without a provable lease"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q '^return ' "$case_dir/treehouse.log" || fail "pool-blind: teardown returned a slot without proving its lease"
+  assert_equals leased "$(cut -d' ' -f1 "$case_dir/th-lease")" "pool-blind: the slot lost its lease"
+  assert_present "$case_dir/state/task-x1.meta" "pool-blind: the task record was removed"
+  assert_present "$slot/.claude/extra-hook.json" "pool-blind: the leftover was deleted before lease proof"
+  grep -Fq "task task-x1's slot $slot was not returned" "$case_dir/stderr" \
+    || fail "pool-blind: refusal did not name the task and slot: $(cat "$case_dir/stderr")"
+  pass "teardown keeps the task, lease, and tolerated leftovers when ownership is unknown"
 }
 
 test_forced_pool_slot_teardown_returns_with_force() {

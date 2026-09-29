@@ -194,13 +194,10 @@
 #
 # Returning a ship task's slot: a Treehouse pool slot holds the task's durable
 # lease, and the return never cleans or resets. Once the landed-work checks have
-# passed, teardown removes only Firstmate's own untracked leftovers (its hook files,
-# and anything untracked under .claude/, which the dirty check tolerates) and then
-# releases the lease with bin/fm-wake-lib.sh's fm_treehouse_slot_release, which owns
-# the contract: a plain `treehouse return` under the task's own holder label, which
-# Treehouse declines whenever anything else is uncommitted, confirmed from the pool's
-# status rather than the exit status. A refusal aborts teardown with the slot still
-# leased and its work intact. Only --force, which the captain's explicit discard
+# passed, teardown removes its own hook files and calls bin/fm-wake-lib.sh's
+# fm_treehouse_slot_release with .claude as permitted leftovers. That function owns
+# the ownership, cleanup, and return contract. A refusal aborts teardown with the
+# slot still leased and its work intact. Only --force, which the captain's explicit discard
 # authorizes, a scout's declared-scratch copy, and a copy that is not a Treehouse
 # pool slot return with `treehouse return --force`, which cleans and resets.
 #
@@ -1781,9 +1778,9 @@ cleanup_stale_lock_for_safety_check() {
 # One return of a worktree/home: the guarded release of a ship task's lease when a
 # guard task id is given, otherwise `treehouse return --force`. Prints Treehouse's
 # output and returns non-zero when the slot was not returned.
-teardown_run_treehouse_return() {  # <dir> <cd-dir> [<guard-task-id>]
+teardown_run_treehouse_return() {  # <dir> <cd-dir> [<guard-task-id>] [<cleanup-pathspec>]
   if [ -n "${3:-}" ]; then
-    fm_treehouse_slot_release "$2" "$1" "$3"
+    fm_treehouse_slot_release "$2" "$1" "$3" ${4:+"$4"}
   else
     ( cd "$2" && treehouse return --force "$1" )
   fi
@@ -1793,12 +1790,12 @@ teardown_run_treehouse_return() {  # <dir> <cd-dir> [<guard-task-id>]
 # release when a guard task id is given, tolerating a transient or stale git
 # index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
-  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} guard_id=${5:-}
+  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} guard_id=${5:-} cleanup_pathspec=${6:-}
   local out lock attempt=0 max_retries lock_desc
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
-  if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" 2>&1); then
+  if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" "$cleanup_pathspec" 2>&1); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
   fi
@@ -1823,7 +1820,7 @@ teardown_treehouse_return() {
     echo "teardown: $label return failed with transient git lock ($lock_desc); waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${max_retries})" >&2
     sleep "$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS"
 
-    if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" 2>&1); then
+    if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" "$cleanup_pathspec" 2>&1); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
       return 0
@@ -1850,7 +1847,7 @@ teardown_treehouse_return() {
           return 1
         fi
       fi
-      if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" 2>&1); then
+      if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" "$cleanup_pathspec" 2>&1); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0
@@ -3604,19 +3601,20 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # to the pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks
   # left by a killed crew process; see the script header for retry and stale-lock proof.
-  # A ship task's copy is released without ever being cleaned or reset: only what the
-  # checks above tolerate as Firstmate's own is removed, and anything else that is
-  # uncommitted makes Treehouse decline the return, which aborts teardown.
+  # A ship task's copy is released without ever being reset. The guarded release
+  # removes tolerated leftovers only after ownership is proved, and refuses other
+  # uncommitted work.
   post_lock_cleanup_check=
   return_guard_id=
+  return_cleanup_pathspec=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
     if fm_treehouse_pool_slot "$PROJ" "$WT"; then
       return_guard_id=$ID
-      git -C "$WT" clean -fdq -- .claude 2>/dev/null || true
+      return_cleanup_pathspec=.claude
     fi
   fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" "$return_guard_id" || {
+  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" "$return_guard_id" "$return_cleanup_pathspec" || {
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
   }

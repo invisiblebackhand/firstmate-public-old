@@ -552,8 +552,10 @@ test_relaunch_of_a_pool_slot_with_no_lease_warns_and_continues() {
     expect_code 0 "$rc" "a relaunch into a slot with no lease should still succeed ($variant)"$'\n'"$out"
     case "$variant" in
       available)
-        assert_contains "$out" "is not leased to it" "the relaunch should say the slot is not leased"
+        assert_contains "$out" "task $id's Treehouse slot" "the warning should name the task and slot"
         assert_contains "$out" "holds no lease" "the warning should say Treehouse holds no lease"
+        assert_contains "$out" "stays unprotected" "the warning should say the slot is unprotected"
+        assert_contains "$out" "until this task is cleaned up and respawned" "the warning should state the transition end"
         ;;
       unreadable)
         assert_contains "$out" "could not confirm task $id's lease" "the relaunch should say it could not confirm the lease"

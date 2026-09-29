@@ -150,6 +150,33 @@ SH
   chmod +x "$1/treehouse"
 }
 
+test_status_reader_recognizes_only_empty_array_as_empty_pool() {
+  local shape out status
+  read_case "$(make_case status-shapes)"
+  cat > "$FAKEBIN_DIR/treehouse" <<'SH'
+#!/usr/bin/env bash
+case "$FM_TEST_STATUS_SHAPE" in
+  array) printf ' [] \n' ;;
+  empty) : ;;
+  null) printf 'null\n' ;;
+esac
+SH
+  chmod +x "$FAKEBIN_DIR/treehouse"
+  for shape in array empty null; do
+    out=$(FM_TEST_STATUS_SHAPE="$shape" PATH="$FAKEBIN_DIR:$PATH" bash -c '
+      . "$1/bin/fm-wake-lib.sh"
+      fm_treehouse_status_rows "$2" "$3"
+    ' _ "$ROOT" "$PROJECT_DIR" "$CASE_DIR/pool")
+    status=$?
+    case "$shape" in
+      array) expect_code 0 "$status" "[] should be a readable empty pool" ;;
+      *) expect_code 1 "$status" "$shape should be unknown status" ;;
+    esac
+    assert_equals "" "$out" "$shape should produce no slot rows"
+  done
+  pass "only [] is a readable empty Treehouse pool"
+}
+
 # Safety: nothing here may touch a pool outside the case. A slot that is not
 # under the case directory stops the test before it acts on that slot.
 require_scratch_slot() {  # <slot>
@@ -455,8 +482,9 @@ test_release_without_a_pool_status_still_proves_the_tree_clean() {
   require_scratch_slot "$slot"
   out=$(release_slot "$slot" rel-blind-clean "$FAKEBIN_DIR")
   status=$?
-  expect_code 0 "$status" "a clean slot should be released on the return's own success"$'\n'"$out"
-  assert_equals "available -" "$(slot_row "$slot")" "the released slot is not back in the pool"
+  expect_code 1 "$status" "a clean slot with an unprovable lease should not be returned"$'\n'"$out"
+  assert_contains "$out" "task rel-blind-clean's slot $slot was not returned" "the refusal should name the task and slot"
+  assert_equals "leased rel-blind-clean" "$(slot_row "$slot")" "the clean slot lost its lease"
 
   slot=$(lease_slot rel-blind-dirty)
   require_scratch_slot "$slot"
@@ -466,7 +494,8 @@ test_release_without_a_pool_status_still_proves_the_tree_clean() {
   expect_code 1 "$status" "a slot holding uncommitted work was released without a pool status"$'\n'"$out"
   assert_equals precious "$(cat "$slot/notes.txt" 2>/dev/null)" "the release dropped uncommitted work"
   assert_equals "leased rel-blind-dirty" "$(slot_row "$slot")" "the slot holding uncommitted work lost its lease"
-  pass "a release proves the tree clean itself, so it is safe where Treehouse cannot report the pool"
+  assert_contains "$out" "task rel-blind-dirty's slot $slot was not returned" "the dirty refusal should name the task and slot"
+  pass "a release refuses clean and dirty slots when Treehouse cannot prove their leases"
 }
 
 test_a_spawn_continues_when_treehouse_cannot_report_leases() {
@@ -493,3 +522,4 @@ test_teardown_releases_the_lease_a_spawn_took
 test_release_returns_a_clean_slot_and_drops_no_uncommitted_work
 test_release_without_a_pool_status_still_proves_the_tree_clean
 test_a_spawn_continues_when_treehouse_cannot_report_leases
+test_status_reader_recognizes_only_empty_array_as_empty_pool

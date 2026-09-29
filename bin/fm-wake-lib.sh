@@ -1487,15 +1487,13 @@ fm_treehouse_pool_slot() {  # <project-dir> <worktree>
 # task's slot read as free and was handed out.
 #
 # The lease ends only when Firstmate returns the slot, and that return never cleans
-# or resets. fm_treehouse_slot_release proves the copy holds nothing uncommitted,
-# then runs a plain `treehouse return` under the task's own holder label with stdin
-# closed. Only the operator's explicit discard (fm-teardown.sh --force) and a scout's
+# or resets. fm_treehouse_slot_release owns the guarded return contract.
+# Only the operator's explicit discard (fm-teardown.sh --force) and a scout's
 # declared-scratch copy return with --force, which does clean and reset.
 #
 # Firstmate reads a lease from `treehouse status --json`. An older Treehouse without
-# it still takes and returns the lease but cannot report it: the checks that read a
-# lease then say so and carry on, and a release trusts the return's own exit status
-# after its clean-tree proof.
+# it still takes the lease but cannot report it: spawn and relaunch warn and carry
+# on, while a release refuses when it cannot prove ownership.
 #
 # A relaunch reuses the copy and takes no new lease: the lease outlives the worker.
 # It verifies the lease still names the task (fm_treehouse_slot_verdict). The
@@ -1609,7 +1607,8 @@ fm_treehouse_slot_root() {  # <worktree>
 # require it - nor a stable key order beyond a slot's path preceding its status and
 # lease holder. Returns 1 when the status cannot be read, or holds anything but an
 # empty pool yet yields no slot: a shape this reader does not know must never read
-# as a pool with nothing in it.
+# as a pool with nothing in it. Only a literal [] (apart from whitespace) is a
+# known empty pool.
 fm_treehouse_status_rows() {  # <project-dir> [<pool-root>]
   local project=$1 root=${2:-} json rows
   if [ -n "$root" ]; then
@@ -1655,10 +1654,8 @@ fm_treehouse_status_rows() {  # <project-dir> [<pool-root>]
       }
     }')
   if [ -z "$rows" ]; then
-    case $(printf '%s' "$json" | tr -d '[:space:]') in
-      ''|'[]'|null) return 0 ;;
-      *) return 1 ;;
-    esac
+    [[ $json =~ ^[[:space:]]*\[\][[:space:]]*$ ]] && return 0
+    return 1
   fi
   printf '%s\n' "$rows"
 }
@@ -1749,10 +1746,10 @@ fm_treehouse_return_holder_guard() {
 }
 
 # Release a task's slot to the pool without cleaning or resetting anything in it.
-# The slot is first proved to hold nothing uncommitted (git status, taking no lock
-# and showing untracked files whatever the repository configures), so the release
-# never leans on what a given Treehouse does with its confirmation prompt. It is
-# then returned with a plain `treehouse return`, limited to the task's own lease
+# Treehouse status must first prove the slot is leased to this task; unknown or
+# conflicting ownership refuses without a return or cleanup, naming the task and
+# slot. Optional trailing pathspecs are cleaned only after that proof, before git
+# status proves nothing else is uncommitted. Return is limited to the task's lease
 # when Treehouse can, with stdin closed so no prompt is ever answered. Treehouse
 # 2.3.0 declines a copy it reads as dirty with exit status 0, so where Treehouse
 # can report the pool the release is confirmed from its status (the slot back as
@@ -1761,34 +1758,45 @@ fm_treehouse_return_holder_guard() {
 # else, holds uncommitted work, the return failed, or the slot is still held
 # afterwards, naming why on stderr and in FM_TREEHOUSE_RELEASE_ERROR (a caller that
 # captures the output in a subshell reads the reason from stderr).
-fm_treehouse_slot_release() {  # <project-dir> <worktree> <task-id>
+fm_treehouse_slot_release() {  # <project-dir> <worktree> <task-id> [<cleanup-pathspec>...]
   FM_TREEHOUSE_RELEASE_ERROR=
   fm_treehouse_slot_release_run "$@" && return 0
   echo "$FM_TREEHOUSE_RELEASE_ERROR" >&2
   return 1
 }
 
-fm_treehouse_slot_release_run() {  # <project-dir> <worktree> <task-id>
-  local project=$1 worktree=$2 id=$3 slot out rc dirty reported=1
+fm_treehouse_slot_release_run() {  # <project-dir> <worktree> <task-id> [<cleanup-pathspec>...]
+  local project=$1 worktree=$2 id=$3 slot out rc dirty
   local -a guard=()
+  shift 3
   slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || {
     FM_TREEHOUSE_RELEASE_ERROR="$worktree is not a directory"
     return 1
   }
-  if fm_treehouse_slot_lease "$project" "$slot"; then
-    case "$FM_TREEHOUSE_SLOT_STATUS" in
-      available) return 0 ;;
-      leased)
-        [ "$FM_TREEHOUSE_SLOT_HOLDER" = "$id" ] || {
-          FM_TREEHOUSE_RELEASE_ERROR="$slot is leased to '${FM_TREEHOUSE_SLOT_HOLDER:-no holder}', not to task $id"
-          return 1
-        }
-        if fm_treehouse_return_holder_guard; then guard=(--if-lease-holder "$id"); fi
-        ;;
-    esac
-  else
-    reported=0
+  fm_treehouse_slot_lease "$project" "$slot" || {
+    FM_TREEHOUSE_RELEASE_ERROR="task $id's slot $slot was not returned and nothing was cleaned: $FM_TREEHOUSE_SLOT_ERROR"
+    return 1
+  }
+  case "$FM_TREEHOUSE_SLOT_STATUS" in
+    available) return 0 ;;
+    leased)
+      [ "$FM_TREEHOUSE_SLOT_HOLDER" = "$id" ] || {
+        FM_TREEHOUSE_RELEASE_ERROR="task $id's slot $slot is leased to '${FM_TREEHOUSE_SLOT_HOLDER:-no holder}'; nothing was returned or cleaned"
+        return 1
+      }
+      ;;
+    *)
+      FM_TREEHOUSE_RELEASE_ERROR="task $id's slot $slot has status '$FM_TREEHOUSE_SLOT_STATUS'; nothing was returned or cleaned"
+      return 1
+      ;;
+  esac
+  if [ "$#" -gt 0 ]; then
+    git -C "$slot" clean -fdq -- "$@" || {
+      FM_TREEHOUSE_RELEASE_ERROR="task $id's slot $slot could not have its permitted leftovers cleaned, so it was not returned"
+      return 1
+    }
   fi
+  if fm_treehouse_return_holder_guard; then guard=(--if-lease-holder "$id"); fi
   dirty=$(git --no-optional-locks -C "$slot" status --porcelain --untracked-files=all 2>/dev/null) || {
     FM_TREEHOUSE_RELEASE_ERROR="cannot tell whether $slot holds uncommitted work (git status failed), so it was not returned"
     return 1
@@ -1808,10 +1816,6 @@ fm_treehouse_slot_release_run() {  # <project-dir> <worktree> <task-id>
     FM_TREEHOUSE_RELEASE_ERROR="treehouse did not release $slot (it still reads '$FM_TREEHOUSE_SLOT_STATUS'), so nothing was cleaned or reset"
     return 1
   fi
-  # A Treehouse that could not report the pool before the return cannot confirm it
-  # after: the return's own success is all there is. One that reported it before and
-  # cannot now is not trusted.
-  [ "$reported" = 0 ] && return 0
   FM_TREEHOUSE_RELEASE_ERROR="treehouse return ran for $slot but its status cannot be read to confirm the release: $FM_TREEHOUSE_SLOT_ERROR"
   return 1
 }

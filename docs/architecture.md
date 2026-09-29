@@ -281,7 +281,8 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
 The [`fm-spawn.sh` header](../bin/fm-spawn.sh) owns ship/scout worktree isolation and fresh-base refusal rules, including spawns from linked homes.
-A crewmate's slot is taken with a durable Treehouse lease in the task's name, so a slot a live task record names is never handed to another task or reset while no worker runs in it, and it is returned without ever cleaning or resetting; [`bin/fm-wake-lib.sh`](../bin/fm-wake-lib.sh) owns that contract, and a relaunch verifies the lease instead of taking a new one.
+A crewmate's slot is taken with a durable Treehouse lease in the task's name; [`bin/fm-wake-lib.sh`](../bin/fm-wake-lib.sh) owns its guarded return contract, and a relaunch checks the existing lease rather than taking a new one.
+Tasks spawned before this lease was added remain unprotected on relaunch until they are cleaned up and respawned, and Treehouse can hand out and reset their slots whenever no worker runs in them.
 Portable regressions live in [`tests/fm-spawn-pool-base-freshen.test.sh`](../tests/fm-spawn-pool-base-freshen.test.sh) for spawn isolation and base freshness, [`tests/fm-control-relaunch.test.sh`](../tests/fm-control-relaunch.test.sh) for preserving the recorded copy and verifying its lease on relaunch, and [`tests/fm-teardown.test.sh`](../tests/fm-teardown.test.sh) for the guarded release.
 [`tests/fm-spawn-pool-slot-guard.test.sh`](../tests/fm-spawn-pool-slot-guard.test.sh) drives the real Treehouse in scratch pools, and skips without it, to prove a stopped task's slot stays out of a later spawn's reach and a release never drops uncommitted work.
 
