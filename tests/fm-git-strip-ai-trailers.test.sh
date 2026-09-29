@@ -25,12 +25,6 @@ with_hooks_env() {  # <hooks-dir> <command...>
   GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$hooks "$@"
 }
 
-with_hooks_env_and_home() {  # <hooks-dir> <home> <command...>
-  local hooks=$1 home=$2
-  shift 2
-  GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$hooks FM_HOME=$home "$@"
-}
-
 make_repo() {
   local dir=$1
   fm_git_init_commit "$dir"
