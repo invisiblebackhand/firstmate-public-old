@@ -893,7 +893,9 @@ pane_file() {  # <dir> <literal|keys|submits>
 
 test_dialog_guard_blocks_the_ring_on_each_string_alone() {
   local screen dir rc notice want
-  for screen in title offer-body confirm-body scan-row scan-row-wrapped scan-status scan-status-fullscreen scan-status-no-frame \
+  for screen in title offer-body confirm-body scan-row scan-row-wrapped \
+    scan-message-wrapped scan-message-wrapped-ascii scan-hint-wrapped scan-hint-wrapped-ascii \
+    scan-both-wrapped scan-both-wrapped-ascii scan-status scan-status-fullscreen scan-status-no-frame \
     wrapped-title title-fullscreen title-no-frame title-no-footer; do
     dir=$(dialog_case "dialog-$screen" "$screen")
     [ "$(dialog_strings_on "$(fm_test_claude_dialog_screen "$screen")")" = 1 ] \
@@ -910,7 +912,7 @@ test_dialog_guard_blocks_the_ring_on_each_string_alone() {
       title|wrapped-title|title-fullscreen|title-no-frame|title-no-footer) want=$FM_TEST_DIALOG_TITLE ;;
       offer-body) want=$FM_TEST_DIALOG_OFFER_BODY ;;
       confirm-body) want=$FM_TEST_DIALOG_CONFIRM_BODY ;;
-      scan-row|scan-row-wrapped|scan-status|scan-status-fullscreen|scan-status-no-frame) want=$FM_TEST_DIALOG_SCAN_ROW ;;
+      scan-row|scan-row-wrapped|scan-message-wrapped|scan-message-wrapped-ascii|scan-hint-wrapped|scan-hint-wrapped-ascii|scan-both-wrapped|scan-both-wrapped-ascii|scan-status|scan-status-fullscreen|scan-status-no-frame) want=$FM_TEST_DIALOG_SCAN_ROW ;;
     esac
     notice=$(cat "$dir/notice")
     assert_contains "$notice" "task t1" "$screen: the notice must name the task"
@@ -1022,7 +1024,8 @@ test_dialog_guard_ignores_a_string_quoted_outside_the_dialog() {
   local view screen dir rc
   for view in viewport bounded; do
     for screen in quoted-title quoted-title-at-row-start quoted-offer-body quoted-confirm-body \
-      quoted-scan-row quoted-scan-row-at-row-start quoted-scan-row-bullet rule-then-title rule-then-scan-status \
+      quoted-scan-row quoted-scan-row-at-row-start quoted-scan-row-bullet quoted-scan-row-bullet-wrapped \
+      rule-then-title rule-then-scan-status \
       status-then-scan-status mock-in-output quoted-in-other-dialog; do
       dir=$(dialog_case "dialog-quoted-$view-$screen" "$screen")
       [ "$(dialog_strings_on "$(fm_test_claude_dialog_screen "$screen")")" -ge 1 ] \

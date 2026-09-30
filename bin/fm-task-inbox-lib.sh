@@ -327,8 +327,11 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 #     other rule.
 #   the scan string is read on the scan's two screens. In the wizard's spinner it
 #     must BEGIN a row, after at most one spinner glyph (a non-ASCII symbol or
-#     `*`, never a list bullet), with `Esc to cancel` on one of the two rows
-#     under it, because the subtitle that carries it wraps on a narrow pane. In
+#     `*`, never a list bullet), folding up to three following rows until the
+#     glyph-stripped message reaches the marker length. `Esc to cancel` must
+#     appear in up to four folded rows after the last consumed message row;
+#     both folds stop at a blank row or frame rule, so the message and the hint
+#     itself may wrap on a narrow pane. In
 #     the background-task status view it opens the body under a `Status: <state>`
 #     row, so it must BEGIN a row and two of three signals must go with it: a
 #     frame rule within eight rows above, a `Status: <state>` row within three
@@ -445,8 +448,20 @@ _fm_task_inbox_claude_dialog_match() {
               tok = substr(rest, 1, RLENGTH - 1)
               if (tok == "*" || tok !~ /[!-~]/) rest = substr(rest, RLENGTH + 1)
             }
-            if (substr(rest, 1, len) == mark[m] &&
-                (index(txt[t + 1], "Esc to cancel") > 0 || index(txt[t + 2], "Esc to cancel") > 0)) { print mark[m]; exit 0 }
+            last = t
+            for (k = 1; k <= 3 && length(rest) < len && t + k <= n; k++) {
+              if (txt[t + k] == "" || isrule[t + k]) break
+              rest = rest " " txt[t + k]
+              last = t + k
+            }
+            if (substr(rest, 1, len) == mark[m]) {
+              subtitle = ""
+              for (r = last + 1; r <= n && r <= last + 4; r++) {
+                if (txt[r] == "" || isrule[r]) break
+                subtitle = subtitle (subtitle == "" ? "" : " ") txt[r]
+              }
+              if (index(subtitle, "Esc to cancel") > 0) { print mark[m]; exit 0 }
+            }
             if (substr(fold(t, len), 1, len) != mark[m]) continue
             status = 0
             for (r = t - 1; r >= 1 && r >= t - 3; r--) if (isstatus[r]) status = 1

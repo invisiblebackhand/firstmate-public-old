@@ -1026,7 +1026,7 @@ The layouts above come from component code, so the fixtures' form rows, elapsed-
 A pasted copy of a whole dialog, with its frame, options, and footer, is structurally the dialog and is treated as one.
 A quote shows at most one signal, and the portable regressions in `tests/fm-task-inbox.test.sh` and `tests/fm-send-inbox.test.sh` pin that: a string quoted in a note, at a row start, under a rule, beside a `Status:` row, in a pasted mock, or inside another dialog's text does not hold the ring, and the same string above a real dialog still does.
 Each real-dialog case carries exactly one of the four strings, so its verdict can only have come from that string and its structure.
-Those cases cover the offer in the classic, fullscreen, frameless, footerless, and wrapped-title forms, the offer body, the confirm body, the spinner with its subtitle wrapped, and the status view in the classic, fullscreen, and frameless forms.
+Those cases cover the offer in the classic, fullscreen, frameless, footerless, and wrapped-title forms, the offer body, the confirm body, the Unicode and ASCII spinners with the message, cancellation hint, or both wrapped, and the status view in the classic, fullscreen, and frameless forms.
 The same suites show a truncated title and auto mode's own status row not matching, and a dismissed dialog left in scrollback not blocking on the tested tmux path, which reads only the visible viewport.
 The status view is held only while the scan runs, because the body sentence is the one string it shows; its finished and ended bodies carry none of the four strings.
 Later wizard steps, the existing-entries dialog, the proposal review, and the flagged-items picker, were not derived and are not covered.

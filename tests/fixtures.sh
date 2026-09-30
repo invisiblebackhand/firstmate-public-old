@@ -422,14 +422,18 @@ FM_TEST_DIALOG_SCAN_ROW='Scanning your repo and recent sessions'
 # elapsed-time subtitle, and the quoted notes are stand-ins, not claims about
 # Claude's exact text.
 #   real dialog, classic layout:    title offer-body confirm-body scan-row
-#                                   scan-row-wrapped scan-status wrapped-title offer
+#                                   scan-row-wrapped scan-message-wrapped
+#                                   scan-message-wrapped-ascii scan-hint-wrapped
+#                                   scan-hint-wrapped-ascii scan-both-wrapped
+#                                   scan-both-wrapped-ascii scan-status wrapped-title offer
 #   real dialog, other layouts:     title-fullscreen title-no-frame title-no-footer
 #                                   scan-status-fullscreen scan-status-no-frame
 #   a string quoted in ordinary output, no dialog on the screen:
 #                                   quoted-title quoted-title-at-row-start
 #                                   quoted-offer-body quoted-confirm-body
 #                                   quoted-scan-row quoted-scan-row-at-row-start
-#                                   quoted-scan-row-bullet rule-then-title
+#                                   quoted-scan-row-bullet quoted-scan-row-bullet-wrapped
+#                                   rule-then-title
 #                                   rule-then-scan-status status-then-scan-status
 #                                   mock-in-output quoted-in-other-dialog
 #   a quote above a real dialog:    quote-above-dialog
@@ -465,6 +469,18 @@ fm_test_claude_dialog_screen() {
       printf '● done\n\n✻  %s…\nthen drafting a proposal %s this can take a moment (Esc to cancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
     scan-row-wrapped)
       printf '● done\n\n✻  %s…\nthen drafting a proposal %s this can take\na moment (Esc to cancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
+    scan-message-wrapped)
+      printf '● done\n\n✻ Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to cancel)\n' "$dash" ;;
+    scan-message-wrapped-ascii)
+      printf '● done\n\n* Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to cancel)\n' "$dash" ;;
+    scan-hint-wrapped)
+      printf '● done\n\n✻ %s…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
+    scan-hint-wrapped-ascii)
+      printf '● done\n\n* %s…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
+    scan-both-wrapped)
+      printf '● done\n\n✻ Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$dash" ;;
+    scan-both-wrapped-ascii)
+      printf '● done\n\n* Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$dash" ;;
     scan-status)
       printf '● done\n\n%s\n  Auto-mode setup scan\n  1m 12s\n\n  Status: running\n\n%s\n%s\n\n%s\n' "$rule" "$status1" "$status2" "$statusfoot" ;;
     scan-status-fullscreen)
@@ -491,6 +507,8 @@ fm_test_claude_dialog_screen() {
       printf '● done\n\n  - %s… appears while it runs.\n  - It stops when the proposal is ready.\n\n%s\n' "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
     quoted-scan-row-bullet)
       printf '● done\n\n  - %s…\n  - Esc to cancel stops it.\n\n%s\n' "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
+    quoted-scan-row-bullet-wrapped)
+      printf '● done\n\n  - Scanning your repo and\n    recent sessions…\n  Esc to cancel stops it.\n\n%s\n' "$idle" ;;
     rule-then-scan-status)
       printf '● done\n\n%s\n%s, then drafting an auto-mode proposal is what the dialog says.\n\n%s\n' "$rule" "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
     status-then-scan-status)
