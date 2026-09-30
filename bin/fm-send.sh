@@ -60,7 +60,7 @@
 # A Claude target whose screen shows its auto-mode setup dialog, or whose screen
 # cannot be read, is never typed into either: an Enter there could accept the
 # offer. The ring is skipped with a notice, and the same library owns that guard,
-# including when Escape is delivered.
+# including what counts as the dialog being shown and when Escape is delivered.
 #
 # TYPED - the LOCAL text that must reach the terminal itself: a harness-native
 # invocation (a leading "/", or a leading "$" to a codex target) must reach

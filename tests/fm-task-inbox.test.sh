@@ -26,12 +26,14 @@
 #   6. Dead panes: the doorbell line is a shell no-op when executed by a bare
 #      shell, the ring skips an agent the backend classifies dead, and the
 #      watcher surfaces such a record exactly once instead of re-ringing.
-#   7. Claude's auto-mode setup dialog: a Claude pane showing any one of the
-#      dialog's strings is never typed into or sent Enter, whichever caller
-#      rings; Escape (Not now) goes through fm-control only for an idle worker;
-#      the record stays durable and is delivered once the dialog is gone; the
-#      watcher's stale wake names a dialog it could not cancel; every other
-#      readable pane rings as before.
+#   7. Claude's auto-mode setup dialog: a Claude pane showing the dialog (one of
+#      its strings inside its own UI structure, in every layout) is never typed
+#      into or sent Enter, whichever caller rings; Escape (Not now) goes through
+#      fm-control only for an idle worker; the record stays durable and is
+#      delivered once the dialog is gone; the watcher's stale wake names a
+#      dialog it could not cancel; every other readable pane rings as before,
+#      including one whose output merely quotes a dialog string, and a real
+#      dialog is still held when a quote shares its screen.
 #   8. A Claude pane whose screen cannot be read - the backend's capture fails
 #      or comes back empty - is held the same way but is never sent Escape
 #      either, since nothing shows what is on it; each held watcher attempt
@@ -819,38 +821,12 @@ test_watcher_dead_pane_ignores_stale_busy_state() {
 # session transcripts. These cases drive the real ring, the real fm-control
 # interrupt it calls, and a real watcher over the shared fake Claude pane
 # (tests/fixtures.sh), which records every typed byte and every named key. The
-# screens are assembled from the strings the installed binary carries; the real
-# dialog is never opened, because opening it sends transcript-derived material
-# to a model.
-
-# The four strings, written out here independently of the implementation so a
-# change to either side fails a test instead of passing quietly.
-DIALOG_TITLE='Teach auto mode about your environment?'
-DIALOG_OFFER_BODY='Auto mode works better when it knows your environment'
-DIALOG_CONFIRM_BODY='Claude Code reads this project, your recent Claude sessions'
-DIALOG_SCAN_ROW='Scanning your repo and recent sessions'
-
-# dialog_screen <name>: the text of one screen on stdout. Every dialog screen
-# carries exactly one of the four strings, so a guard verdict on it can only
-# have come from that string. The others carry none: bare-prompt is the sparsest
-# screen that still shows something, while blank (whitespace only) and empty
-# (nothing at all) show nothing the guard could read.
-dialog_screen() {
-  local rule
-  rule=$(printf '─%.0s' $(seq 64))
-  case "$1" in
-    title) printf '● done\n\n  %s\n\n  ❯ 1. Yes\n    2. Not now\n    3. Do not show again\n' "$DIALOG_TITLE" ;;
-    offer-body) printf '● done\n\n  %s, so it\n  can tell routine work from risky actions.\n' "$DIALOG_OFFER_BODY" ;;
-    confirm-body) printf '● done\n\n  %s,\n  and a few settings files.\n\n  enter to continue · esc to cancel\n' "$DIALOG_CONFIRM_BODY" ;;
-    scan-row) printf '● done\n\n  ⠋ %s…\n  Esc to cancel\n' "$DIALOG_SCAN_ROW" ;;
-    wrapped-title) printf '● done\n\n  Teach auto mode about\n      your environment?\n\n  ❯ 1. Yes\n' ;;
-    auto-mode-footer) printf '● done\n%s\n❯ \n%s\n  ⏵⏵ auto mode on (shift+tab to cycle)\n' "$rule" "$rule" ;;
-    near-miss) printf '● done\n%s\n❯ \n%s\n  Teach auto mode about your\n' "$rule" "$rule" ;;
-    bare-prompt) printf '\n\n  ❯\n' ;;
-    blank) printf '\n   \n\n \t\n' ;;
-    empty) ;;
-  esac
-}
+# screens come from fm_test_claude_dialog_screen, which draws them from the UI
+# structure Claude Code's own component code gives the dialog; the real dialog
+# is never opened, because opening it sends transcript-derived material to a
+# model. The contract under test is owned by bin/fm-task-inbox-lib.sh: a string
+# counts only inside the dialog's own UI structure, so the same words quoted in
+# ordinary output never hold a ring.
 
 # How many of the four strings a screen carries after the whitespace folding a
 # wrapped pane needs. Asserting it is 1 for every dialog screen keeps the cases
@@ -858,7 +834,7 @@ dialog_screen() {
 dialog_strings_on() {  # <screen-text>
   local flat n=0 str
   flat=$(printf '%s' "$1" | LC_ALL=C tr -s '[:space:]' ' ')
-  for str in "$DIALOG_TITLE" "$DIALOG_OFFER_BODY" "$DIALOG_CONFIRM_BODY" "$DIALOG_SCAN_ROW"; do
+  for str in "$FM_TEST_DIALOG_TITLE" "$FM_TEST_DIALOG_OFFER_BODY" "$FM_TEST_DIALOG_CONFIRM_BODY" "$FM_TEST_DIALOG_SCAN_ROW"; do
     case "$flat" in
       *"$str"*) n=$((n + 1)) ;;
     esac
@@ -869,7 +845,7 @@ dialog_strings_on() {  # <screen-text>
 # One Claude task (t1) in <dir>: a state dir with the endpoint identity
 # fm-control validates before it will press a key, a semantic busy record, and
 # the shared fake tmux whose pane files live in <dir>/pane. <screen> is a
-# dialog_screen name, or `composer` for the fake's own idle Claude composer.
+# fm_test_claude_dialog_screen name, or `composer` for the fake's own idle Claude composer.
 dialog_case() {  # <name> <screen> [harness] [busy: idle|busy|unknown|none] -> echoes case dir
   local name=$1 screen=$2 harness=${3:-claude} busy=${4:-idle} dir
   dir="$TMP_ROOT/$name"
@@ -881,7 +857,7 @@ dialog_case() {  # <name> <screen> [harness] [busy: idle|busy|unknown|none] -> e
     "mode=no-mistakes" "yolo=off"
   [ "$busy" = none ] || "$ROOT/bin/fm-busy-event.sh" arm "$dir/state" t1 \
     --state "$busy" --source claude-hook --event stop > /dev/null
-  [ "$screen" = composer ] || dialog_screen "$screen" > "$dir/pane/pane"
+  [ "$screen" = composer ] || fm_test_claude_dialog_screen "$screen" > "$dir/pane/pane"
   inbox_lib "$dir/state" fm_task_inbox_write "$dir/state" t1 "please continue" > /dev/null
   printf '%s\n' "$dir"
 }
@@ -917,9 +893,10 @@ pane_file() {  # <dir> <literal|keys|submits>
 
 test_dialog_guard_blocks_the_ring_on_each_string_alone() {
   local screen dir rc notice want
-  for screen in title offer-body confirm-body scan-row wrapped-title; do
+  for screen in title offer-body confirm-body scan-row scan-row-wrapped scan-status scan-status-fullscreen scan-status-no-frame \
+    wrapped-title title-fullscreen title-no-frame title-no-footer; do
     dir=$(dialog_case "dialog-$screen" "$screen")
-    [ "$(dialog_strings_on "$(dialog_screen "$screen")")" = 1 ] \
+    [ "$(dialog_strings_on "$(fm_test_claude_dialog_screen "$screen")")" = 1 ] \
       || fail "the $screen screen must carry exactly one dialog string, or its verdict proves nothing"
     rc=$(dialog_ring "$dir")
     [ "$rc" = 4 ] || fail "$screen: a Claude auto-mode setup dialog should skip the ring with 4, got $rc"
@@ -930,10 +907,10 @@ test_dialog_guard_blocks_the_ring_on_each_string_alone() {
       || fail "$screen: only Escape, Not now, may reach the dialog, got: $(pane_file "$dir" keys | tr '\n' ' ')"
     [ -f "$dir/state/t1.inbox/001.msg" ] || fail "$screen: skipping the ring must leave the durable record in place"
     case "$screen" in
-      title|wrapped-title) want=$DIALOG_TITLE ;;
-      offer-body) want=$DIALOG_OFFER_BODY ;;
-      confirm-body) want=$DIALOG_CONFIRM_BODY ;;
-      scan-row) want=$DIALOG_SCAN_ROW ;;
+      title|wrapped-title|title-fullscreen|title-no-frame|title-no-footer) want=$FM_TEST_DIALOG_TITLE ;;
+      offer-body) want=$FM_TEST_DIALOG_OFFER_BODY ;;
+      confirm-body) want=$FM_TEST_DIALOG_CONFIRM_BODY ;;
+      scan-row|scan-row-wrapped|scan-status|scan-status-fullscreen|scan-status-no-frame) want=$FM_TEST_DIALOG_SCAN_ROW ;;
     esac
     notice=$(cat "$dir/notice")
     assert_contains "$notice" "task t1" "$screen: the notice must name the task"
@@ -942,7 +919,7 @@ test_dialog_guard_blocks_the_ring_on_each_string_alone() {
     assert_contains "$notice" "no text and no Enter were sent" "$screen: the notice must say nothing was typed"
     assert_contains "$notice" "Escape, the dialog's cancel key, was delivered" "$screen: the notice must say what was pressed"
   done
-  pass "inbox: a Claude pane showing any one auto-mode setup dialog string is never typed into, and only Escape reaches it"
+  pass "inbox: a Claude pane showing the dialog is never typed into, and only Escape reaches it, whichever one string it shows and in every layout"
 }
 
 test_dialog_guard_sends_no_escape_to_a_worker_that_is_not_idle() {
@@ -1004,7 +981,7 @@ test_dialog_guard_leaves_every_other_pane_alone() {
   for view in viewport bounded; do
     for screen in composer auto-mode-footer near-miss bare-prompt; do
       dir=$(dialog_case "dialog-quiet-$view-$screen" "$screen")
-      [ "$(dialog_strings_on "$(dialog_screen "$screen")")" = 0 ] \
+      [ "$(dialog_strings_on "$(fm_test_claude_dialog_screen "$screen")")" = 0 ] \
         || fail "the $screen screen must carry none of the dialog strings"
       rc=$(dialog_ring "$dir" "$view")
       [ "$rc" = 0 ] || fail "$view/$screen: an ordinary Claude pane should still be rung, got $rc"
@@ -1019,10 +996,72 @@ test_dialog_guard_leaves_every_other_pane_alone() {
   pass "inbox: readable Claude panes, including auto mode's own status row, a near-miss, and a lone prompt glyph, ring as before"
 }
 
+test_dialog_guard_holds_the_whole_offer_and_names_its_title() {
+  local dir rc notice
+  dir=$(dialog_case dialog-offer offer)
+  [ "$(dialog_strings_on "$(fm_test_claude_dialog_screen offer)")" = 2 ] \
+    || fail "the offer screen must carry both the title and the body, or it is not the whole dialog"
+  rc=$(dialog_ring "$dir")
+  [ "$rc" = 4 ] || fail "the whole offer should skip the ring with 4, got $rc"
+  [ -z "$(pane_file "$dir" literal)" ] || fail "text was typed into the offer"
+  [ "$(pane_file "$dir" keys)" = Escape ] \
+    || fail "only Escape, Not now, may reach the offer, got: $(pane_file "$dir" keys | tr '\n' ' ')"
+  notice=$(cat "$dir/notice")
+  assert_contains "$notice" "\"$FM_TEST_DIALOG_TITLE\"" "the notice should name the title, the first string that matched"
+  pass "inbox: the whole offer is held and the notice names its title"
+}
+
+# The reported bug: an idle, ready Claude pane whose ordinary output quotes one
+# of the dialog's strings has no dialog on it, so the ring must go through. Each
+# screen is asserted to carry a string, or the case would pass vacuously; the
+# last five quote the string where the structure alone is not the dialog: a
+# frame rule over a row that merely starts with the title or the scan string, a
+# status row over a row that starts with the scan string, the dialog's shape
+# pasted into a reply, and another select dialog whose text quotes the title.
+test_dialog_guard_ignores_a_string_quoted_outside_the_dialog() {
+  local view screen dir rc
+  for view in viewport bounded; do
+    for screen in quoted-title quoted-title-at-row-start quoted-offer-body quoted-confirm-body \
+      quoted-scan-row quoted-scan-row-at-row-start quoted-scan-row-bullet rule-then-title rule-then-scan-status \
+      status-then-scan-status mock-in-output quoted-in-other-dialog; do
+      dir=$(dialog_case "dialog-quoted-$view-$screen" "$screen")
+      [ "$(dialog_strings_on "$(fm_test_claude_dialog_screen "$screen")")" -ge 1 ] \
+        || fail "the $screen screen must carry a dialog string, or it proves nothing about the guard"
+      rc=$(dialog_ring "$dir" "$view")
+      [ "$rc" = 0 ] || fail "$view/$screen: a string quoted with no dialog on the screen must not hold the ring, got $rc"
+      [ "$(pane_file "$dir" literal | grep -cF 'Firstmate instruction waiting')" = 1 ] \
+        || fail "$view/$screen: the doorbell was not typed:"$'\n'"$(pane_file "$dir" literal)"
+      case "$(pane_file "$dir" keys)" in
+        *Escape*) fail "$view/$screen: a pane with no dialog on it must never be sent Escape" ;;
+      esac
+      [ -z "$(cat "$dir/notice")" ] || fail "$view/$screen: a ring that goes through must leave no notice"
+    done
+  done
+  pass "inbox: a dialog string quoted in ordinary output, with no dialog on the screen, rings as before"
+}
+
+test_dialog_guard_still_holds_when_a_quote_shares_the_screen_with_the_dialog() {
+  local view dir rc notice
+  for view in viewport bounded; do
+    dir=$(dialog_case "dialog-quote-and-dialog-$view" quote-above-dialog)
+    [ "$(dialog_strings_on "$(fm_test_claude_dialog_screen quote-above-dialog)")" = 1 ] \
+      || fail "the quote-above-dialog screen must carry the title, quoted and as the dialog's own title"
+    rc=$(dialog_ring "$dir" "$view")
+    [ "$rc" = 4 ] || fail "$view: a real dialog under a quote of its title should skip the ring with 4, got $rc"
+    [ -z "$(pane_file "$dir" literal)" ] || fail "$view: text was typed into the dialog"
+    [ "$(pane_file "$dir" keys)" = Escape ] \
+      || fail "$view: only Escape, Not now, may reach the dialog, got: $(pane_file "$dir" keys | tr '\n' ' ')"
+    notice=$(cat "$dir/notice")
+    assert_contains "$notice" "\"$FM_TEST_DIALOG_TITLE\"" "$view: the notice should name the string that matched"
+    [ -f "$dir/state/t1.inbox/001.msg" ] || fail "$view: skipping the ring must leave the durable record in place"
+  done
+  pass "inbox: a real dialog is still held when the same words are also quoted elsewhere on the screen"
+}
+
 test_dialog_guard_reads_only_the_viewport() {
   local dir rc deep shallow
   dir=$(dialog_case dialog-scrollback composer)
-  dialog_screen offer-body > "$dir/pane/scrollback"
+  fm_test_claude_dialog_screen offer-body > "$dir/pane/scrollback"
   deep=$(PATH="$dir/fakebin:$PATH" FM_FAKE_PANE_DIR="$dir/pane" tmux capture-pane -p -t x -S -50)
   shallow=$(PATH="$dir/fakebin:$PATH" FM_FAKE_PANE_DIR="$dir/pane" tmux capture-pane -p -t x -S -0)
   [ "$(dialog_strings_on "$deep")" = 1 ] && [ "$(dialog_strings_on "$shallow")" = 0 ] \
@@ -1232,11 +1271,63 @@ test_watcher_escalation_names_a_dialog_it_could_not_cancel() {
   [ "$(grep -cF 'unread firstmate instruction' "$dir/state/.wake-queue")" = 1 ] \
     || fail "the escalation must fire exactly once:"$'\n'"$(cat "$dir/state/.wake-queue" 2>/dev/null)"
   grep -qF "$rec" "$dir/state/.wake-queue" || fail "the stale wake should name the record path"
-  grep -qF "auto-mode setup dialog (matched \"$DIALOG_TITLE\")" "$dir/state/.wake-queue" \
+  grep -qF "auto-mode setup dialog (matched \"$FM_TEST_DIALOG_TITLE\")" "$dir/state/.wake-queue" \
     || fail "the stale wake should name the dialog and the string that matched:"$'\n'"$(cat "$dir/state/.wake-queue")"
   grep -qF 'cancel the dialog with Escape, never Enter' "$dir/state/.wake-queue" \
     || fail "the stale wake should say how to clear the dialog safely:"$'\n'"$(cat "$dir/state/.wake-queue")"
   pass "watcher: a stale wake for a steer stuck behind a Claude dialog names the dialog and the safe key"
+}
+
+# The reported path: fm-market's idle pane printed a note quoting the title, the
+# watcher's attempts were held three times, and its stale wake said the dialog
+# was up. With the quote and no dialog, the watcher delivers the doorbell and
+# never names a dialog.
+test_watcher_rings_a_pane_that_only_quotes_the_dialog() {
+  local dir out pid i=0
+  dir=$(dialog_case dialog-watch-quoted quoted-title)
+  out="$dir/watch.out"
+  age_path "$dir/state/t1.inbox/001.msg"
+  dialog_watch "$dir" "$out" FM_TASK_INBOX_RING_MAX=99
+  pid=$!
+  while [ "$i" -lt 150 ]; do
+    grep -qF 'Firstmate instruction waiting' "$dir/pane/submits" 2>/dev/null && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  kill -0 "$pid" 2>/dev/null \
+    || fail "delivering a steer must not wake firstmate (watcher exited):"$'\n'"$(cat "$out")"
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  grep -qF 'Firstmate instruction waiting' "$dir/pane/submits" 2>/dev/null \
+    || fail "the doorbell never reached a pane that only quotes the dialog:"$'\n'"keys: $(pane_file "$dir" keys | tr '\n' ' ')"
+  case "$(pane_file "$dir" keys)" in
+    *Escape*) fail "a pane with no dialog on it was sent Escape: $(pane_file "$dir" keys | tr '\n' ' ')" ;;
+  esac
+  [ ! -s "$dir/state/.wake-queue" ] || fail "delivery queued a wake:"$'\n'"$(cat "$dir/state/.wake-queue")"
+  if grep -qF 'auto-mode setup dialog' "$dir/state/.watch-triage.log" 2>/dev/null; then
+    fail "the triage log blamed a dialog on a pane that only quotes one:"$'\n'"$(cat "$dir/state/.watch-triage.log")"
+  fi
+  pass "watcher: a pane that only quotes the dialog's title gets the doorbell, never Escape, and is not blamed on a dialog"
+}
+
+test_watcher_escalation_does_not_name_a_dialog_the_pane_only_quotes() {
+  local dir out pid rec
+  dir=$(dialog_case dialog-watch-quoted-escalate quoted-title)
+  out="$dir/watch.out"
+  rec="$dir/state/t1.inbox/001.msg"
+  age_path "$rec"
+  dialog_watch "$dir" "$out" FM_TASK_INBOX_RING_MAX=1
+  pid=$!
+  wait_watcher_gone "$pid" \
+    || { kill "$pid" 2>/dev/null; fail "the watcher never escalated a steer nobody acknowledged"; }
+  grep -qF 'Firstmate instruction waiting' "$dir/pane/submits" 2>/dev/null \
+    || fail "the watcher should have rung the pane before it escalated"
+  [ "$(grep -cF 'unread firstmate instruction' "$dir/state/.wake-queue")" = 1 ] \
+    || fail "the escalation must fire exactly once:"$'\n'"$(cat "$dir/state/.wake-queue" 2>/dev/null)"
+  grep -qF "$rec" "$dir/state/.wake-queue" || fail "the stale wake should name the record path"
+  assert_not_contains "$(cat "$dir/state/.wake-queue")" "auto-mode setup dialog" \
+    "the stale wake must not claim a dialog is up on a pane that only quotes one"
+  pass "watcher: a stale wake for a steer on a pane that only quotes the dialog does not name a dialog"
 }
 
 test_watcher_holds_an_unreadable_claude_screen_without_waking_firstmate() {
@@ -1323,6 +1414,9 @@ test_dialog_guard_blocks_the_ring_on_each_string_alone
 test_dialog_guard_sends_no_escape_to_a_worker_that_is_not_idle
 test_dialog_guard_defers_then_delivers_once_the_dialog_is_gone
 test_dialog_guard_reports_a_failed_escape
+test_dialog_guard_holds_the_whole_offer_and_names_its_title
+test_dialog_guard_ignores_a_string_quoted_outside_the_dialog
+test_dialog_guard_still_holds_when_a_quote_shares_the_screen_with_the_dialog
 test_dialog_guard_leaves_every_other_pane_alone
 test_dialog_guard_reads_only_the_viewport
 test_dialog_guard_covers_only_claude_targets
@@ -1332,5 +1426,7 @@ test_dialog_guard_defers_an_unreadable_screen_then_delivers_once_it_reads
 test_watcher_never_rings_a_claude_dialog
 test_watcher_delivers_after_the_dialog_is_dismissed
 test_watcher_escalation_names_a_dialog_it_could_not_cancel
+test_watcher_rings_a_pane_that_only_quotes_the_dialog
+test_watcher_escalation_does_not_name_a_dialog_the_pane_only_quotes
 test_watcher_holds_an_unreadable_claude_screen_without_waking_firstmate
 test_watcher_escalation_names_a_screen_it_could_not_read
