@@ -310,30 +310,32 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # What counts as Claude's auto-mode setup dialog being shown: the one statement
 # of this contract, which the header above, bin/fm-send.sh, bin/fm-watch.sh, and
 # the docs only point at. The guard must never type into the dialog, but a screen
-# that merely quotes its words - a printed learnings note, a pasted mock of the
-# dialog, another dialog's command text - is not the dialog, and holding the ring
-# for one blocks a steer and makes the watcher's stale wake name a dialog that is
-# not there. So a string counts only inside the dialog's own UI structure, read
+# that merely quotes its words without enough matching structure - a printed
+# learnings note or another dialog's command text - is not the dialog, and
+# holding the ring for one blocks a steer and makes the watcher's stale wake
+# name a dialog that is not there. So a string counts only inside the dialog's own UI structure, read
 # from the visible rows with whitespace folded, so a string the pane wrapped
 # still matches:
 #   head strings (the offer's title and body, the wizard confirm step's body)
 #     must BEGIN a row, and two of three structural signals must go with them: a
 #     frame rule (a row opening with eight or more `─` or `▔`) within eight rows
-#     above; numbered option rows with the focus pointer (`❯ 1. ...` then
-#     `2. ...`, or `> ` where the terminal is not unicode) below, before any
-#     other rule; a footer hint row (a row opening with a key hint, `<keys> to
-#     <action>`, that names Enter: `Enter to confirm`, `Enter to continue`
+#     above; two or more consecutive option rows with consecutive numbers and
+#     a focus pointer on any one (`❯ `, or `> ` where the terminal is not unicode)
+#     within 24 rows below, before any other rule; a footer hint row within the
+#     same bound (a row opening with a key hint, `<keys> to <action>`, that names
+#     Enter: `Enter to confirm`, `Enter to continue`
 #     after `←/→ to change usage`, `Esc/Enter/Space to close`) below, before any
 #     other rule.
 #   the scan string is read on the scan's two screens. In the wizard's spinner it
-#     must BEGIN a row, after at most one spinner glyph (a non-ASCII symbol or
-#     `*`, never a list bullet), folding up to three following rows until the
-#     glyph-stripped message reaches the marker length. `Esc to cancel` must
-#     appear in up to four folded rows after the last consumed message row;
+#     must BEGIN a row, after at most one leading space-delimited spinner token
+#     (a token with no printable ASCII, or a lone `*`, never a list bullet),
+#     folding up to three following rows until the glyph-stripped message
+#     reaches the marker length. `Esc to cancel` must appear in up to four
+#     folded rows after the last consumed message row;
 #     both folds stop at a blank row or frame rule, so the message and the hint
-#     itself may wrap on a narrow pane. In
-#     the background-task status view it opens the body under a `Status: <state>`
-#     row, so it must BEGIN a row and two of three signals must go with it: a
+#     itself may wrap on a narrow pane. In the background-task status view it
+#     opens the body under a `Status: <state>` row, so it must BEGIN a row and
+#     two of three signals must go with it: a
 #     frame rule within eight rows above, a `Status: <state>` row within three
 #     rows above, a footer hint row within eight rows below, before any other
 #     rule.
@@ -342,9 +344,11 @@ fm_task_inbox_doorbell_line() {  # <record-path>
 # because the shared dialog component draws its frame as `─` in the classic
 # layout and `▔` in the fullscreen modal, can be told to hide its frame or its
 # footer, and swaps the footer while an exit is pending: one absent signal must
-# not blind the guard, yet a quote or a pasted mock still shows at most one. The
-# shapes come from Claude Code's own component code, never from provoking the
-# dialog: opening it, or running /auto-mode-setup, would send transcript-derived
+# not blind the guard. Quotes with insufficient structure do not match; a
+# pasted copy with enough matching structure is indistinguishable from the
+# dialog and holds the ring. The shapes come from Claude Code's own component
+# code, never from provoking the dialog: opening it, or running /auto-mode-setup,
+# would send transcript-derived
 # material to a model.
 # docs/verification/runtime-backends.md "Claude auto-mode setup dialog markers"
 # records what was derived, from which version, and what it leaves unchecked,
@@ -514,10 +518,11 @@ fm_task_inbox_claude_dialog_shown() {  # <state-dir> <task-id> <backend> <target
 # read, setting FM_TASK_INBOX_RING_NOTICE for either; 1 leaves the ring exactly
 # as it was. The task comes from the record's own inbox directory, so a record
 # outside a <task>.inbox rings as before.
-# A busy or unclassified worker is not sent Escape: a dialog is only offered
-# between turns, so a working pane is not showing one, and Escape there would
-# cancel the turn. Nothing is typed in either case, so a worker whose screen
-# shows the dialog but does not read idle is deferred, spends ring budget, and
+# A busy or unclassified worker is not sent Escape: the offer is made between
+# turns, but matching screen structure does not prove the worker is idle, and
+# Escape during a working turn would cancel it. Nothing is typed in either
+# case, so a worker whose screen shows the dialog but does not read idle is
+# deferred, spends ring budget, and
 # surfaces through the ladder's ordinary escalation rather than being
 # interrupted.
 fm_task_inbox_claude_dialog_guard() {  # <backend> <target> <record-path> [expected-label]
