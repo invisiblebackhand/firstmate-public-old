@@ -19,17 +19,8 @@
 #       prefixes the pane with GIT_CONFIG_COUNT / GIT_CONFIG_KEY_0 /
 #       GIT_CONFIG_VALUE_0.
 #
-#       The pre-push wrapper optionally runs a configured guard before chaining.
-#       At install time the wrapper resolves the firstmate config directory,
-#       bakes the absolute path to pre-push-guard into the hook, and reads that
-#       file at push time. When the file exists and its first non-empty line
-#       names an executable absolute path, that guard is invoked with the same
-#       arguments and stdin git gave the hook. A non-zero exit refuses the push,
-#       a missing or non-executable configured guard also refuses the push, and
-#       a configured path that is not absolute refuses the push. Failure to read
-#       the guard config or capture stdin also refuses the push. When the file
-#       is absent, empty, or names only whitespace, the wrapper behaves exactly
-#       as it does today.
+#       The pre-push wrapper's optional guard configuration and refusal
+#       behavior are documented in docs/configuration.md (Pre-push guard).
 #
 # WHY THIS EXISTS. Claude launches already carry attribution-off in their
 # per-launch --settings JSON. Cursor and other non-Claude runtimes inject a
