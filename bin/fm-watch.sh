@@ -582,7 +582,7 @@ inbox_steer_check() {  # <window> <task>
       dialog=$(fm_task_inbox_claude_dialog_shown "$STATE" "$task" "$backend" "$w" "$(window_label "$w")") || shown_rc=$?
       case "$shown_rc" in
         0) cause="its screen shows Claude Code's auto-mode setup dialog (matched \"$dialog\"), which no doorbell may answer, so inspect the worker and cancel the dialog with Escape, never Enter" ;;
-        2) cause="its screen could not be read (the backend's capture failed or came back empty), so no doorbell was typed onto it; inspect the worker before pressing any key" ;;
+        2) cause="its screen could not be read (the backend's capture failed or came back empty); inspect the worker before pressing any key" ;;
       esac
       reason="stale: $w (unread firstmate instruction: $rec still unhandled after $count doorbell delivery attempts with an idle pane; $cause)"
       if [ ! -d "${rec%/*}" ] || [ ! -f "$rec" ]; then
