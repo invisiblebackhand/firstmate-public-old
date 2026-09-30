@@ -3399,6 +3399,208 @@ assert_contains "$answers_out" $'expanded-substring\tapprove\tUnsafe configurati
   || fail "expanded choices did not produce exactly three keyed answers"
 pass "expanded prompts preserve nested targets, typed notes, and keyed answers"
 
+# A text selection gives Lavish a text-range target whose start and end are
+# themselves mappings (selector, an inline path array, offset), one level deeper
+# than a table-cell target. This capture is the encoder's own output for
+# synthetic rows: an empty path encodes as `path: []`, and the top-level fields
+# after the block end it.
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
+  session_ended: true
+prompts[5]:
+  - uid: ""
+    prompt: Rename this term
+    selector: "main#doc > section:nth-of-type(2) > p:nth-of-type(1)"
+    tag: text
+    text: Selected phrase
+    target:
+      type: text-range
+      text: Selected phrase
+      selector: "main#doc > section:nth-of-type(2) > p:nth-of-type(1)"
+      commonAncestorSelector: "main#doc > section:nth-of-type(2) > p:nth-of-type(1)"
+      start:
+        selector: "main#doc > section:nth-of-type(2) > p:nth-of-type(1)"
+        path[1]: 1
+        offset: 4
+      end:
+        selector: "main#doc > section:nth-of-type(2) > p:nth-of-type(1)"
+        path[1]: 1
+        offset: 19
+  - uid: ""
+    prompt: ""
+    selector: main#doc > p
+    tag: text
+    text: Nested boundary phrase
+    target:
+      type: text-range
+      text: Nested boundary phrase
+      selector: main#doc > p
+      commonAncestorSelector: main#doc > p
+      start:
+        selector: main#doc > p > em
+        path[3]: 0,2,1
+        offset: 0
+      end:
+        selector: main#doc > p > strong
+        path: []
+        offset: 7
+  - uid: el-choice
+    prompt: "Context data: {\"schema\":\"fm-bearings-answer.v1\",\"question\":\"textrange-choice\",\"selection\":\"approve\",\"note\":\"\"}"
+    selector: section#choice
+    tag: choice
+    text: Approve
+  - uid: el-cell
+    prompt: Check the table cell
+    selector: table#risk > tbody > tr
+    tag: span
+    text: Exposure
+    target:
+      type: table-cell
+      selector: table#risk
+      rowLabel: Orders
+      columnLabel: Allowed
+      text: No
+  - uid: ""
+    prompt: "Closing message, with a comma"
+    selector: ""
+    tag: message
+    text: Freeform message
+next_step: x
+dom_snapshot: ""
+EOF
+out=$(read_out) || fail "read refused a capture with text-range annotations"
+assert_contains "$out" "declared_items: 5" "text-range capture lost its declared count"
+assert_contains "$out" "presented_items: 5" "text-range capture dropped an item"
+assert_contains "$out" "malformed_items: 0" "text-range capture reported a malformed item"
+assert_contains "$out" "complete: yes" "text-range capture was not certified complete"
+assert_contains "$out" "annotation_count: 4" "text-range capture miscounted its annotations"
+assert_contains "$out" "session_ending_message_count: 1" "text-range capture lost its closing message"
+assert_contains "$out" "| Closing message, with a comma" "text-range capture lost its closing message body"
+assert_not_contains "$out" "HASH(" "a nested target was presented as a raw reference"
+textrange_annotation() {  # <n>: the section of $out that presents annotation n
+  printf '%s\n' "$out" | awk -v n="$1" '
+    $0 == "ANNOTATION " n " of 4" { keep = 1; next }
+    /^(ANNOTATION [0-9]+ of 4|END ANNOTATIONS)$/ { keep = 0 }
+    keep'
+}
+section=$(textrange_annotation 1)
+assert_contains "$section" $'target_type:\n| text-range' "a text-range target lost its type"
+assert_contains "$section" $'target_text:\n| Selected phrase' "a text-range target lost its selected text"
+assert_contains "$section" $'target_commonAncestorSelector:\n| main#doc > section:nth-of-type(2) > p:nth-of-type(1)' \
+  "a text-range target lost its common ancestor"
+assert_contains "$section" $'target_start_selector:\n| main#doc > section:nth-of-type(2) > p:nth-of-type(1)\ntarget_start_path:\n| [1]\ntarget_start_offset:\n| 4\ntarget_end_selector:\n| main#doc > section:nth-of-type(2) > p:nth-of-type(1)\ntarget_end_path:\n| [1]\ntarget_end_offset:\n| 19\ntext:' \
+  "a text-range target lost or misordered its range boundaries"
+section=$(textrange_annotation 2)
+assert_contains "$section" $'target_start_selector:\n| main#doc > p > em\ntarget_start_path:\n| [0,2,1]\ntarget_start_offset:\n| 0\ntarget_end_selector:\n| main#doc > p > strong\ntarget_end_path:\n| []\ntarget_end_offset:\n| 7\ntext:' \
+  "a multi-step or empty boundary path was not presented with its own annotation"
+section=$(textrange_annotation 3)
+assert_not_contains "$section" "target_" "a choice with no target gained target fields"
+section=$(textrange_annotation 4)
+assert_contains "$section" $'target_type:\n| table-cell' "a table-cell target beside a text-range lost its type"
+assert_contains "$section" $'target_rowLabel:\n| Orders' "a table-cell target beside a text-range lost its row label"
+assert_not_contains "$section" "target_start_" "a table-cell target gained range boundaries"
+answers_out=$("$ROOT/bin/fm-procevent-lavish.sh" answers "$READ") \
+  || fail "answers refused a capture with text-range annotations"
+assert_equals $'textrange-choice\tapprove\tApprove' "$answers_out" \
+  "a choice beside text-range annotations did not reach keyed intake"
+reconciles_out=$("$ROOT/bin/fm-procevent-lavish.sh" reconciles "$READ") \
+  || fail "reconciles refused a capture with text-range annotations"
+[ -z "$reconciles_out" ] || fail "reconciles invented rows for a capture with text-range annotations"
+pass "text-range annotations reach presentation and keyed intake with their range boundaries"
+
+# The nested shape is understood only as far as Lavish emits it: one mapping level
+# under the target, holding scalars and inline arrays. Anything else in that
+# position is still refused by every reader instead of being certified complete.
+write_textrange_capture() {  # <the start/end lines that follow commonAncestorSelector> [declared rows]
+  {
+    printf 'session:\n  file: /review.html\n  status: feedback\n'
+    printf 'prompts[%s]:\n  - uid: ""\n    prompt: note\n    selector: "p#a"\n    tag: text\n    text: Phrase\n' "${2:-1}"
+    printf '    target:\n      type: text-range\n      text: Phrase\n      selector: "p#a"\n'
+    printf '      commonAncestorSelector: "p#a"\n%s\n' "$1"
+  } > "$READ"
+}
+range_with_start_field() {  # <the start mapping's path line>
+  printf '      start:\n        selector: "p#a"\n%s\n        offset: 1\n' "$1"
+  printf '      end:\n        selector: "p#a"\n        path[1]: 0\n        offset: 6'
+}
+refuses_textrange() {  # <what> <refusal text> <the start/end lines> [declared rows]
+  write_textrange_capture "$3" "${4:-1}"
+  out=$(read_out 2>&1) && fail "read accepted $1"
+  assert_contains "$out" "$2" "read did not explain its refusal of $1"
+  assert_not_contains "$out" "complete: yes" "$1 was reported complete"
+  # `if`, not `&& fail`: a correct refusal must leave this function returning 0.
+  if "$ROOT/bin/fm-procevent-lavish.sh" answers "$READ" >/dev/null 2>&1; then
+    fail "answers accepted $1"
+  fi
+  if "$ROOT/bin/fm-procevent-lavish.sh" reconciles "$READ" >/dev/null 2>&1; then
+    fail "reconciles accepted $1"
+  fi
+}
+write_textrange_capture "$(range_with_start_field '        path[1]: 0')"
+out=$(read_out) || fail "read refused a minimal text-range capture"
+assert_contains "$out" $'target_end_offset:\n| 6' "the minimal text-range capture lost its end boundary"
+# An empty path may also arrive as a declared count of zero, and a quoted item is
+# one item even when it holds a comma: the same count refuses an unquoted comma.
+write_textrange_capture "$(range_with_start_field '        path[0]:')"
+out=$(read_out) || fail "read refused an empty path declared with a count of zero"
+assert_contains "$out" $'target_start_path:\n| []' "an empty path declared with a count of zero was not presented as empty"
+write_textrange_capture "$(range_with_start_field '        path[2]: "a,b",3')"
+read_out >/dev/null || fail "read refused a quoted path item holding a comma"
+refuses_textrange "an unquoted comma splitting a path item" \
+  "cannot read Lavish expanded target field start.path: declared 2, found 3" \
+  "$(range_with_start_field '        path[2]: a,b,3')"
+refuses_textrange "a path shorter than its declared count" \
+  "cannot read Lavish expanded target field start.path: declared 2, found 1" \
+  "$(range_with_start_field '        path[2]: 0')"
+refuses_textrange "a path longer than its declared count" \
+  "cannot read Lavish expanded target field start.path: declared 1, found 2" \
+  "$(range_with_start_field '        path[1]: 0,1')"
+refuses_textrange "a list-form path" \
+  "cannot read Lavish expanded target field start.path: declared 2, found 0" \
+  "$(range_with_start_field $'        path[2]:\n          - 0\n          - 1')"
+refuses_textrange "an unterminated quoted path item" \
+  "cannot read Lavish expanded target field start.path: malformed inline array" \
+  "$(range_with_start_field '        path[2]: 0,"1')"
+refuses_textrange "a mapping nested inside a range boundary" \
+  "cannot read Lavish expanded target field start.inner: expected scalar" \
+  "$(range_with_start_field $'        inner:\n          selector: "p#a"')"
+refuses_textrange "a range boundary field outside any mapping" \
+  "cannot read Lavish expanded target: field outside mapping" \
+  $'        selector: "p#a"'
+refuses_textrange "an unrecognized nested target mapping" \
+  "cannot read Lavish expanded target field anchor: expected scalar" \
+  $'      anchor:\n        selector: "p#a"'
+# A boundary mapping ends at the next line that is not indented under it, so a
+# nested field after that point belongs to nothing.
+refuses_textrange "a range boundary field after a sibling target field" \
+  "cannot read Lavish expanded target: field outside mapping" \
+  "$(range_with_start_field '        path[1]: 0')"$'\n      note: x\n        selector: "p#a"'
+refuses_textrange "a range boundary field after a row field" \
+  "cannot read Lavish expanded target: field outside mapping" \
+  "$(range_with_start_field '        path[1]: 0')"$'\n    tag: text\n        selector: "p#a"'
+refuses_textrange "a range boundary field at the start of the next row" \
+  "cannot read Lavish expanded target: field outside mapping" \
+  "$(range_with_start_field '        path[1]: 0')"$'\n  - uid: ""\n        selector: "p#a"' 2
+cat > "$READ" <<'EOF'
+session:
+  file: /review.html
+  status: feedback
+prompts[1]:
+  - uid: ""
+    prompt: note
+    selector: "p#a"
+    tag: text
+    text: Phrase
+    start:
+      selector: "p#a"
+EOF
+out=$(read_out 2>&1) && fail "read accepted a range mapping outside a target"
+assert_contains "$out" "cannot read Lavish expanded field start: expected scalar" \
+  "read did not explain its refusal of a range mapping outside a target"
+pass "text-range parsing accepts only the nested shape Lavish emits"
+
 # This capture is written as UTF-8 text, then read by the actual Lavish result
 # parser and the public `answers` command.  Its encoded label is 1,026 bytes,
 # so a 512-byte cap would split the final character.  The adapter's one 512

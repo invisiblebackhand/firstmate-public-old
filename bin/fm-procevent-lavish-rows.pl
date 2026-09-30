@@ -5,6 +5,9 @@ use JSON::PP;
 # Lavish emits flat prompt rows as TOON CSV, and switches the entire block to
 # expanded mappings when one row has a nested target. Return the same hashes
 # for both shapes so presentation and keyed-answer intake share one verdict.
+# A text selection's target nests one level further: its `start` and `end` are
+# mappings of scalars and inline arrays (`path[2]: 0,1`, or `path: []` when
+# empty). Nothing deeper or different is understood, and it is refused.
 sub lavish_rows {
   my ($path, $allow_empty) = @_;
   open my $fh, '<:encoding(UTF-8)', $path or die "cannot read Lavish result: $!\n";
@@ -33,6 +36,7 @@ sub lavish_rows {
 
   my @rows;
   my $malformed = 0;
+  my ($boundary, $boundary_name);  # the start/end mapping the current lines fill
   for my $i ($header + 1 .. $#lines) {
     my $line = $lines[$i];
     last unless $line =~ /^\s/;
@@ -73,10 +77,12 @@ sub lavish_rows {
     if ($line =~ /^  - ([A-Za-z][A-Za-z0-9]*):\s*(.*)$/) {
       die "cannot read Lavish expanded item: too many rows\n" if @rows >= $want;
       push @rows, {};
+      $boundary = undef;
       my ($key, $value) = ($1, $2);
       $rows[-1]{$key} = lavish_scalar($value);
     } elsif ($line =~ /^    ([A-Za-z][A-Za-z0-9]*):\s*(.*)$/) {
       die "cannot read Lavish expanded item: field before item\n" unless @rows;
+      $boundary = undef;
       my ($key, $value) = ($1, $2);
       if ($key eq 'target') {
         die "cannot read Lavish expanded target: expected mapping\n" if length $value;
@@ -88,9 +94,19 @@ sub lavish_rows {
     } elsif ($line =~ /^      ([A-Za-z][A-Za-z0-9]*):\s*(.*)$/) {
       die "cannot read Lavish expanded target: field outside target\n"
         unless @rows && ref($rows[-1]{target}) eq 'HASH';
+      $boundary = undef;
       my ($key, $value) = ($1, $2);
-      die "cannot read Lavish expanded target field $key: expected scalar\n" unless length $value;
-      $rows[-1]{target}{$key} = lavish_scalar($value);
+      if (!length $value && ($key eq 'start' || $key eq 'end')) {
+        $boundary = $rows[-1]{target}{$key} = {};
+        $boundary_name = $key;
+      } else {
+        die "cannot read Lavish expanded target field $key: expected scalar\n" unless length $value;
+        $rows[-1]{target}{$key} = lavish_scalar($value);
+      }
+    } elsif ($line =~ /^        ([A-Za-z][A-Za-z0-9]*)(?:\[(\d+)\])?:\s*(.*)$/) {
+      die "cannot read Lavish expanded target: field outside mapping\n" unless $boundary;
+      my ($key, $count, $value) = ($1, $2, $3);
+      $boundary->{$key} = lavish_boundary_value("$boundary_name.$key", $count, $value);
     } else {
       die "cannot read Lavish expanded item line: $line\n";
     }
@@ -113,6 +129,40 @@ sub lavish_scalar {
   my $decoded = eval { JSON::PP->new->utf8(0)->decode($value) };
   die "cannot read Lavish expanded quoted scalar: $value\n" if $@ || ref($decoded);
   return $decoded;
+}
+
+# One field of a start/end mapping: a scalar, or an inline array `key[N]: a,b`
+# whose declared count must match what follows. An empty array is the literal
+# `key: []` or a declared count of zero. Arrays Lavish would spread over
+# following lines are refused.
+sub lavish_boundary_value {
+  my ($name, $count, $value) = @_;
+  if (defined $count) {
+    my @items = length $value ? lavish_inline_items($name, $value) : ();
+    die "cannot read Lavish expanded target field $name: declared $count, found " . scalar(@items) . "\n"
+      unless @items == $count;
+    return \@items;
+  }
+  die "cannot read Lavish expanded target field $name: expected scalar\n" unless length $value;
+  return [] if $value eq '[]';
+  return lavish_scalar($value);
+}
+
+sub lavish_inline_items {
+  my ($name, $text) = @_;
+  my @items;
+  while (1) {
+    if ($text =~ s/^("(?:[^"\\]|\\.)*")//) {
+      push @items, lavish_scalar($1);
+    } else {
+      $text =~ s/^([^,"]*)//;
+      push @items, $1;
+    }
+    last unless length $text;
+    $text =~ s/^,//
+      or die "cannot read Lavish expanded target field $name: malformed inline array\n";
+  }
+  return @items;
 }
 
 1;
