@@ -804,6 +804,172 @@ test_no_mistakes_origin_remote_allows() {
   pass "no-mistakes worktree with HEAD on origin is torn down (no regression)"
 }
 
+# Make the case's task copy a Treehouse pool slot (<pool>/.treehouse/<clone>/<slot>/<repo>
+# beside the pool's state file; $case_dir/wt stays a path to it) and give the case a
+# `treehouse` that models what a teardown needs of one: `status --json` reports the
+# slot leased to task-x1 until a return releases it, a `return` releases it, and one
+# it reads as dirty is declined with exit status 0 when FM_FAKE_TH_DECLINE is set (as
+# Treehouse 2.3.0 declines). FM_FAKE_TH_STATUS=fail makes its status fail, as a
+# Treehouse without `status --json` does. Every call is logged to
+# $case_dir/treehouse.log. Echoes the slot's physical path.
+make_pool_slot_case() {
+  local case_dir=$1 clone slot
+  clone="$case_dir/pool/.treehouse/proj-abc"
+  mkdir -p "$clone/1"
+  git -C "$case_dir/project" worktree move "$case_dir/wt" "$clone/1/project"
+  ln -s "$clone/1/project" "$case_dir/wt"
+  printf '{}\n' > "$clone/treehouse-state.json"
+  slot=$(cd "$clone/1/project" && pwd -P)
+  printf 'leased task-x1\n' > "$case_dir/th-lease"
+  : > "$case_dir/treehouse.log"
+  cat > "$case_dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$case_dir/treehouse.log"
+read -r th_state th_holder < "$case_dir/th-lease"
+case "\${1:-}" in
+  status)
+    if [ "\${FM_FAKE_TH_STATUS:-}" = fail ]; then echo 'Error: unknown flag: --json' >&2; exit 1; fi
+    if [ "\$th_state" = leased ]; then
+      printf '[{"name":"1","path":"$slot","status":"leased","lease_holder":"%s"}]\n' "\$th_holder"
+    else
+      printf '[{"name":"1","path":"$slot","status":"available"}]\n'
+    fi
+    ;;
+  return)
+    case " \$* " in
+      *" --help "*) echo '      --if-lease-holder string   only return when leased to this holder'; exit 0 ;;
+      *" --force "*) ;;
+      *) [ -z "\${FM_FAKE_TH_DECLINE:-}" ] || { echo 'Aborting: worktree has uncommitted changes'; exit 0; } ;;
+    esac
+    echo available > "$case_dir/th-lease"
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$case_dir/fakebin/treehouse"
+  printf '%s\n' "$slot"
+}
+
+# A landed ship task in a pool slot whose copy still carries Firstmate's own untracked
+# leftovers under .claude/, which the dirty check tolerates.
+make_landed_pool_slot_case() {  # <name>: echoes "<case>|<slot>"
+  local case_dir slot
+  case_dir=$(make_case "$1")
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit "$case_dir" "shippable work"
+  git -C "$case_dir/wt" push -q origin fm/task-x1
+  git -C "$case_dir/project" fetch -q origin
+  slot=$(make_pool_slot_case "$case_dir")
+  mkdir -p "$slot/.claude"
+  printf '{}\n' > "$slot/.claude/extra-hook.json"
+  printf '%s|%s\n' "$case_dir" "$slot"
+}
+
+test_pool_slot_teardown_releases_the_lease_without_a_reset() {
+  local made case_dir slot rc
+  made=$(make_landed_pool_slot_case pool-release)
+  case_dir=${made%%|*}
+  slot=${made#*|}
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-release: a landed task in a pool slot should be torn down"$'\n'"$(cat "$case_dir/stderr")"
+  grep -Fxq "return --if-lease-holder task-x1 $slot" "$case_dir/treehouse.log" \
+    || fail "pool-release: teardown did not release the slot under the task's own lease: $(cat "$case_dir/treehouse.log")"
+  ! grep -q -- '--force' "$case_dir/treehouse.log" \
+    || fail "pool-release: teardown returned the slot with --force, which cleans and resets"
+  assert_equals available "$(cut -d' ' -f1 "$case_dir/th-lease")" "pool-release: the slot is still leased"
+  assert_absent "$slot/.claude/extra-hook.json" "pool-release: Firstmate's own leftover was not removed"
+  assert_absent "$case_dir/state/task-x1.meta" "pool-release: the task record survived a completed teardown"
+  pass "a ship task's pool slot is released under its own lease, never forced"
+}
+
+test_pool_slot_teardown_stops_when_treehouse_declines_the_release() {
+  local made case_dir rc
+  made=$(make_landed_pool_slot_case pool-declined)
+  case_dir=${made%%|*}
+
+  set +e
+  FM_FAKE_TH_DECLINE=1 run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pool-declined: teardown should stop when the slot is not released"
+  grep -q 'treehouse return failed for worktree' "$case_dir/stderr" \
+    || fail "pool-declined: teardown did not say the return failed: $(cat "$case_dir/stderr")"
+  assert_equals leased "$(cut -d' ' -f1 "$case_dir/th-lease")" "pool-declined: the slot lost its lease"
+  ! grep -q -- '--force' "$case_dir/treehouse.log" \
+    || fail "pool-declined: teardown fell back to a forced return"
+  assert_present "$case_dir/state/task-x1.meta" "pool-declined: the task record was removed with the slot still held"
+  pass "a pool slot Treehouse declines to release keeps its lease, and teardown stops"
+}
+
+test_pool_slot_teardown_releases_when_treehouse_cannot_report_leases() {
+  local made case_dir slot rc
+  made=$(make_landed_pool_slot_case pool-blind)
+  case_dir=${made%%|*}
+  slot=${made#*|}
+
+  set +e
+  FM_FAKE_TH_STATUS=fail run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "pool-blind: teardown should stop without a provable lease"$'\n'"$(cat "$case_dir/stderr")"
+  ! grep -q '^return ' "$case_dir/treehouse.log" || fail "pool-blind: teardown returned a slot without proving its lease"
+  assert_equals leased "$(cut -d' ' -f1 "$case_dir/th-lease")" "pool-blind: the slot lost its lease"
+  assert_present "$case_dir/state/task-x1.meta" "pool-blind: the task record was removed"
+  assert_present "$slot/.claude/extra-hook.json" "pool-blind: the leftover was deleted before lease proof"
+  grep -Fq "task task-x1's slot $slot was not returned" "$case_dir/stderr" \
+    || fail "pool-blind: refusal did not name the task and slot: $(cat "$case_dir/stderr")"
+  pass "teardown keeps the task, lease, and tolerated leftovers when ownership is unknown"
+}
+
+test_forced_pool_slot_teardown_returns_with_force() {
+  local made case_dir rc
+  made=$(make_landed_pool_slot_case pool-forced)
+  case_dir=${made%%|*}
+
+  set +e
+  run_teardown "$case_dir" --force > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-forced: teardown --force should succeed"$'\n'"$(cat "$case_dir/stderr")"
+  grep -Fxq "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    || fail "pool-forced: an explicit discard did not return with --force: $(cat "$case_dir/treehouse.log")"
+  ! grep -q -- '--if-lease-holder' "$case_dir/treehouse.log" \
+    || fail "pool-forced: an explicit discard was limited to a lease holder"
+  pass "an explicit discard returns a pool slot with --force, as before"
+}
+
+test_scout_pool_slot_teardown_returns_its_scratch_copy_with_force() {
+  local case_dir slot rc
+  case_dir=$(make_case pool-scout)
+  write_meta "$case_dir" no-mistakes scout
+  printf '%s\n' decisions_reviewed=1 decision_keys= >> "$case_dir/state/task-x1.meta"
+  mkdir -p "$case_dir/data/task-x1"
+  printf '# Report\n\nThe investigation finished.\n' > "$case_dir/data/task-x1/report.md"
+  slot=$(make_pool_slot_case "$case_dir")
+  # The reproduction files a scout leaves behind are declared scratch.
+  printf 'scratch\n' > "$slot/repro-notes.txt"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "pool-scout: a scout with its report should be torn down"$'\n'"$(cat "$case_dir/stderr")"
+  grep -Fxq "return --force $case_dir/wt" "$case_dir/treehouse.log" \
+    || fail "pool-scout: a scout's scratch copy was not returned with --force: $(cat "$case_dir/treehouse.log")"
+  ! grep -q -- '--if-lease-holder' "$case_dir/treehouse.log" \
+    || fail "pool-scout: a scout's scratch copy was released through the guarded return"
+  pass "a scout's declared-scratch pool slot is returned with --force"
+}
+
 test_no_mistakes_truly_unpushed_refuses() {
   local case_dir rc
   case_dir=$(make_case nm-unpushed)
@@ -4070,6 +4236,11 @@ test_teardown_manual_backend_leaves_the_backlog_to_the_operator
 test_local_only_truly_unpushed_refuses
 test_local_only_merged_to_local_main_allows
 test_no_mistakes_origin_remote_allows
+test_pool_slot_teardown_releases_the_lease_without_a_reset
+test_pool_slot_teardown_stops_when_treehouse_declines_the_release
+test_pool_slot_teardown_releases_when_treehouse_cannot_report_leases
+test_forced_pool_slot_teardown_returns_with_force
+test_scout_pool_slot_teardown_returns_its_scratch_copy_with_force
 test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_secondmate_pr_registration_publishes_ready_line

@@ -196,10 +196,10 @@ new_case() {
   printf '%s\n' "$dir"
 }
 
-# add_ship_task <case-dir> <id> [harness] [session]
+# add_ship_task <case-dir> <id> [harness] [session] [worktree]
 add_ship_task() {
   local dir=$1 id=$2 harness=${3:-claude} ses=${4:-fmses}
-  local home="$dir/home" proj="$dir/proj" wt="$dir/wt"
+  local home="$dir/home" proj="$dir/proj" wt=${5:-$dir/wt}
   fm_git_worktree "$proj" "$wt" "task-$id"
   mkdir -p "$home/data/$id"
   cat > "$home/data/$id/brief.md" <<EOF
@@ -463,6 +463,125 @@ test_relaunch_from_linked_home_preserves_recorded_worktree() {
   assert_grep 'unfinished task work' "$dir/wt/task.txt" "relaunch discarded unfinished task work"
   [ ! -e "$fetch_head" ] || fail "relaunch fetched instead of preserving the recorded copy"
   pass "fm-control relaunch: a linked spawning home preserves committed and unfinished work in the recorded copy"
+}
+
+# A ship task whose copy is a Treehouse pool slot, laid out as Treehouse lays one
+# out (<root>/.treehouse/<clone>/<slot>/<repo> beside the pool's state file), and
+# a `treehouse` that reports the slot with <status> and, when given, the lease
+# <holder>. A <status> of "unreadable" makes its status fail. Every call it gets is
+# logged to <case>/fake/treehouse-calls. The slot is $dir/pool/.treehouse/proj-abc/1/proj.
+add_pool_slot_ship_task() {  # <case-dir> <id> <status> [holder]
+  local dir=$1 id=$2 status=$3 holder=${4:-} slot="$1/pool/.treehouse/proj-abc/1/proj" lease=
+  add_ship_task "$dir" "$id" claude fmses "$slot"
+  printf '{}\n' > "$dir/pool/.treehouse/proj-abc/treehouse-state.json"
+  [ -z "$holder" ] || lease=",\"lease_holder\":\"$holder\""
+  cat > "$dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/fake/treehouse-calls"
+case "\${1:-}" in
+  status)
+    [ "$status" != unreadable ] || { echo 'treehouse: status failed' >&2; exit 1; }
+    printf '[{"name":"1","path":"$slot","status":"$status"$lease}]\n'
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$dir/fakebin/treehouse"
+}
+
+# The relaunch reuses the recorded copy and takes no new lease: the lease a spawn
+# took outlives the worker. It only proves the lease still names the task.
+test_relaunch_reuses_a_pool_slot_leased_to_the_task() {
+  local dir id out rc
+  id=rl-lease-mine
+  dir=$(new_case lease-mine "$id")
+  add_pool_slot_ship_task "$dir" "$id" leased "$id"
+  out=$(run_control "$dir" "$id" relaunch --note "recovering after a restart"); rc=$?
+  expect_code 0 "$rc" "a relaunch into the slot leased to it should succeed"$'\n'"$out"
+  assert_not_contains "$out" "is not leased to it" "a slot leased to the task drew a lease warning"
+  grep -q '^status ' "$dir/fake/treehouse-calls" 2>/dev/null \
+    || fail "the relaunch never read the lease on the slot"
+  ! grep -Eq '^(get|return) ' "$dir/fake/treehouse-calls" \
+    || fail "the relaunch took or returned a lease instead of reusing the one it holds"
+  [ "$(meta_field "$dir" "$id" worktree)" = "$dir/pool/.treehouse/proj-abc/1/proj" ] \
+    || fail "the relaunch replaced the recorded slot"
+  assert_grep "Firstmate operational input waiting: read" "$dir/fake/literal" \
+    "the replacement should have been launched"
+  pass "fm-control relaunch: a pool slot leased to the task is reused without taking or returning a lease"
+}
+
+test_relaunch_refuses_a_pool_slot_leased_or_claimed_by_another_task() {
+  local variant dir id out rc before
+  for variant in leased claimed; do
+    id="rl-moved-$variant"
+    dir=$(new_case "moved-$variant" "$id")
+    case "$variant" in
+      leased) add_pool_slot_ship_task "$dir" "$id" leased newer ;;
+      claimed)
+        add_pool_slot_ship_task "$dir" "$id" available
+        printf 'task=newer\nhome=%s\n' "$dir/home" > "$dir/pool/.treehouse/proj-abc/1/.fm-slot-owner"
+        ;;
+    esac
+    printf 'zsh' > "$dir/fake/command"
+    before=$(cat "$dir/home/state/$id.meta")
+
+    out=$(run_spawn "$dir" "$id" --relaunch --harness claude); rc=$?
+
+    expect_code 1 "$rc" "a relaunch into a slot reassigned to another task should refuse ($variant)"$'\n'"$out"
+    assert_contains "$out" "refusing to relaunch task $id into Treehouse slot" \
+      "the refusal should name the task and the slot ($variant)"
+    case "$variant" in
+      leased) assert_contains "$out" "leased to 'newer'" "the refusal should name the task that holds the lease" ;;
+      claimed) assert_contains "$out" "claimed by task newer" "the refusal should name the task that claimed the slot" ;;
+    esac
+    [ -z "$(cat "$dir/fake/literal")" ] || fail "a refused relaunch delivered launch bytes ($variant)"
+    assert_equals "$before" "$(cat "$dir/home/state/$id.meta")" "the refused relaunch changed the task record ($variant)"
+    ! grep -Eq '^(get|return) ' "$dir/fake/treehouse-calls" \
+      || fail "the refused relaunch changed the pool ($variant)"
+  done
+  pass "fm-spawn relaunch: a pool slot leased or claimed by another task is refused, not shared"
+}
+
+test_relaunch_of_a_pool_slot_with_no_lease_warns_and_continues() {
+  local variant dir id out rc
+  for variant in available unreadable; do
+    id="rl-legacy-$variant"
+    dir=$(new_case "legacy-$variant" "$id")
+    add_pool_slot_ship_task "$dir" "$id" "$variant"
+    out=$(run_control "$dir" "$id" relaunch --note "spawned before slots were leased"); rc=$?
+    expect_code 0 "$rc" "a relaunch into a slot with no lease should still succeed ($variant)"$'\n'"$out"
+    case "$variant" in
+      available)
+        assert_contains "$out" "task $id's Treehouse slot" "the warning should name the task and slot"
+        assert_contains "$out" "holds no lease" "the warning should say Treehouse holds no lease"
+        assert_contains "$out" "stays unprotected" "the warning should say the slot is unprotected"
+        assert_contains "$out" "until this task is cleaned up and respawned" "the warning should state the transition end"
+        ;;
+      unreadable)
+        assert_contains "$out" "could not confirm task $id's lease" "the relaunch should say it could not confirm the lease"
+        assert_contains "$out" "could not be read" "the warning should say the lease could not be read"
+        ;;
+    esac
+    assert_grep "Firstmate operational input waiting: read" "$dir/fake/literal" \
+      "the replacement should have been launched ($variant)"
+  done
+  pass "fm-control relaunch: a slot Treehouse holds no lease on, or cannot report on, is relaunched with a warning"
+}
+
+test_relaunch_of_a_copy_outside_a_pool_consults_no_lease() {
+  local dir out rc
+  dir=$(new_case plain-copy rl-plain)
+  add_ship_task "$dir" rl-plain claude
+  cat > "$dir/fakebin/treehouse" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$dir/fake/treehouse-calls"
+exit 0
+SH
+  chmod +x "$dir/fakebin/treehouse"
+  out=$(run_control "$dir" rl-plain relaunch --note "plain copy"); rc=$?
+  expect_code 0 "$rc" "a relaunch of a copy outside any pool should succeed"$'\n'"$out"
+  assert_absent "$dir/fake/treehouse-calls" "a relaunch of a copy outside any pool asked Treehouse about it"
+  pass "fm-control relaunch: a copy that is not a Treehouse slot is relaunched without consulting Treehouse"
 }
 
 test_relaunch_preserves_durable_task_metadata() {
@@ -2389,6 +2508,10 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
+test_relaunch_reuses_a_pool_slot_leased_to_the_task
+test_relaunch_refuses_a_pool_slot_leased_or_claimed_by_another_task
+test_relaunch_of_a_pool_slot_with_no_lease_warns_and_continues
+test_relaunch_of_a_copy_outside_a_pool_consults_no_lease
 test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context

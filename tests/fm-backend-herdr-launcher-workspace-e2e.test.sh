@@ -431,7 +431,7 @@ pass "real herdr E2E: a --secondmate launch still stands up that secondmate's ow
 
 FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$PRIMARY_HOME/state" FM_DATA_OVERRIDE="$PRIMARY_HOME/data" \
   FM_CONFIG_OVERRIDE="$PRIMARY_HOME/config" \
-  "$ROOT/bin/fm-teardown.sh" dupC >"$TMP_ROOT/teardown.out" 2>&1
+  "$ROOT/bin/fm-teardown.sh" dupC --force >"$TMP_ROOT/teardown.out" 2>&1
 status=$?
 [ "$status" -eq 0 ] || fail "fm-teardown.sh failed for dupC"$'\n'"$(cat "$TMP_ROOT/teardown.out")"
 [ ! -f "$DUPC_META" ] || fail "fm-teardown.sh did not remove dupC's meta"

@@ -41,8 +41,9 @@
 # lift the deferral (it authorizes discarding unlanded WORK, never the
 # captain's question), and bin/fm-captain-hold.sh answer stays the only act
 # that closes the call.
-# REFUSES if the worktree holds work that has not LANDED, because cleanup
-# hard-resets/removes the worktree and kills its processes. Work has landed when it is
+# REFUSES if the worktree holds work that has not LANDED, because teardown
+# returns the worktree to a reusable pool slot and kills its processes.
+# Work has landed when it is
 # reachable from any remote-tracking branch (a fork counts as a remote, so
 # upstream-contribution PRs pushed to a fork satisfy this in any mode), OR - for a
 # normal ship task whose commits are not so reachable - when its PR is merged and
@@ -81,7 +82,7 @@
 # Worktree-slot ownership (teardown-slot-collision): a treehouse pool slot is
 # reused across tasks, so a stale, duplicated, or drifted worktree= record can
 # name a slot a DIFFERENT live task now holds. Cleanup kills every process under
-# that path and hard-resets it before returning it, so releasing a slot that is
+# that path and returns it to the pool, so releasing a slot that is
 # not genuinely this task's destroys another worker's live work. Before the first
 # cleanup step, teardown verifies record exclusivity: no OTHER task record in
 # this home or any locally registered Firstmate home may name the same live path
@@ -111,15 +112,14 @@
 # absent claim - a slot taken before claims existed, or already returned - keeps
 # exactly the record-scan protection it had before, because refusing it would
 # strand every task in flight across that change on no evidence at all.
-# Why Treehouse's own state cannot answer this for crewmate slots, and why the
-# claim file sits on top of it, is owned by bin/fm-wake-lib.sh's slot-owner
-# claim comment.
+# bin/fm-wake-lib.sh owns how Treehouse's task lease and the claim together
+# establish slot ownership, including slots spawned before task leases.
 # The recorded endpoint's exact task identity and the record's spawn incarnation
 # are validated separately
 # before cleanup. Its current working directory is only incidental process
 # state: the same worker remains the owner after changing directory, so cwd can
 # never veto teardown of that exact recorded endpoint.
-# The scan and destructive return hold a project-identity lock in the local root
+# The scan and return hold a project-identity lock in the local root
 # Firstmate home's state directory, as resolved by bin/fm-wake-lib.sh's
 # fm_firstmate_root_home; a home seeded from another machine is its own local
 # root, since a lock on this filesystem cannot be held or observed across that
@@ -191,6 +191,13 @@
 #   landed-work checks. Every other windowless record, including one with a
 #   spawn_gen, a non-tmux backend, or an ambiguous field, still faces the
 #   validator and refuses.
+#
+# Returning a ship task's slot: after landed-work checks, teardown removes its
+# hook files and calls bin/fm-wake-lib.sh's fm_treehouse_slot_release with .claude
+# as permitted leftovers. That function owns the guarded release contract.
+# A refusal stops teardown without returning or resetting the slot. Explicit
+# discard (--force), a scout's declared-scratch copy, and a copy outside a
+# Treehouse pool instead use `treehouse return --force`, which cleans and resets.
 #
 # Transient / stale worktree git lock recovery (teardown-lock-race): a crew process
 # killed mid-git-operation can leave a .git/worktrees/<wt>/index.lock (or, for a
@@ -1766,15 +1773,27 @@ cleanup_stale_lock_for_safety_check() {
   return "$TEARDOWN_TREEHOUSE_LOCK_REFUSED"
 }
 
-# Return a worktree/home via `treehouse return --force`, tolerating a transient or
-# stale git index.lock left by a killed crew process. See the script header.
+# One return of a worktree/home: the guarded release of a ship task's lease when a
+# guard task id is given, otherwise `treehouse return --force`. Prints Treehouse's
+# output and returns non-zero when the slot was not returned.
+teardown_run_treehouse_return() {  # <dir> <cd-dir> [<guard-task-id>] [<cleanup-pathspec>]
+  if [ -n "${3:-}" ]; then
+    fm_treehouse_slot_release "$2" "$1" "$3" ${4:+"$4"}
+  else
+    ( cd "$2" && treehouse return --force "$1" )
+  fi
+}
+
+# Return a worktree/home via `treehouse return --force`, or through the guarded
+# release when a guard task id is given, tolerating a transient or stale git
+# index.lock left by a killed crew process. See the script header.
 teardown_treehouse_return() {
-  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-}
+  local dir=$1 cd_dir=$2 label=$3 post_cleanup_check=${4:-} guard_id=${5:-} cleanup_pathspec=${6:-}
   local out lock attempt=0 max_retries lock_desc
 
   # Capture stdout+stderr so non-lock failures stay visible and lock failures can
   # be matched by signature even when the lock file is already gone mid-check.
-  if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+  if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" "$cleanup_pathspec" 2>&1); then
     [ -n "$out" ] && printf '%s\n' "$out"
     return 0
   fi
@@ -1799,7 +1818,7 @@ teardown_treehouse_return() {
     echo "teardown: $label return failed with transient git lock ($lock_desc); waiting ${TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${max_retries})" >&2
     sleep "$TREEHOUSE_RETURN_LOCK_RETRY_WAIT_SECS"
 
-    if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+    if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" "$cleanup_pathspec" 2>&1); then
       [ -n "$out" ] && printf '%s\n' "$out"
       echo "teardown: $label return succeeded on retry; lock cleared on its own" >&2
       return 0
@@ -1826,7 +1845,7 @@ teardown_treehouse_return() {
           return 1
         fi
       fi
-      if out=$( ( cd "$cd_dir" && treehouse return --force "$dir" ) 2>&1 ); then
+      if out=$(teardown_run_treehouse_return "$dir" "$cd_dir" "$guard_id" "$cleanup_pathspec" 2>&1); then
         [ -n "$out" ] && printf '%s\n' "$out"
         echo "teardown: $label return succeeded after stale-lock cleanup" >&2
         return 0
@@ -2370,8 +2389,8 @@ require_exclusive_task_worktree_slot() {
   require_exclusive_worktree_slot_record "$META" "$ID" "$STATE" "$slot"
 }
 
-# Positive slot ownership, read from the claim the task that took the slot wrote
-# into the slot itself (bin/fm-wake-lib.sh owns the claim and its states).
+# Positive slot ownership, read from the claim beside the checkout that the task
+# taking the slot wrote (bin/fm-wake-lib.sh owns the claim and its states).
 #
 # The record scan above proves that no OTHER task record names this slot. It
 # cannot prove that THIS record is not the stale one, because the task that took
@@ -3576,15 +3595,24 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
   # Remove our hook file so a reused pool worktree cannot fire signals for a dead task.
   rm -f "$WT/.claude/settings.local.json" "$WT/.opencode/plugins/fm-turn-end.js" \
     "$WT/.fm-grok-turnend" "$WT/.fm-kimi-turnend"
-  # Kills remaining processes in the worktree (including the agent), resets, returns
-  # to pool. treehouse resolves the pool from the working directory, so run it from
+  # Kills remaining processes in the worktree (including the agent) and returns it
+  # to the pool. treehouse resolves the pool from the working directory, so run it from
   # the project. teardown_treehouse_return tolerates transient and stale git locks
   # left by a killed crew process; see the script header for retry and stale-lock proof.
+  # A ship task's copy is released without ever being reset. The guarded release
+  # removes tolerated leftovers only after ownership is proved, and refuses other
+  # uncommitted work.
   post_lock_cleanup_check=
+  return_guard_id=
+  return_cleanup_pathspec=
   if [ "$FORCE" != "--force" ] && [ "$KIND" != scout ] && [ "$KIND" != secondmate ]; then
     post_lock_cleanup_check=validate_worktree_teardown_safety
+    if fm_treehouse_pool_slot "$PROJ" "$WT"; then
+      return_guard_id=$ID
+      return_cleanup_pathspec=.claude
+    fi
   fi
-  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" || {
+  teardown_treehouse_return "$WT" "$PROJ" "worktree" "$post_lock_cleanup_check" "$return_guard_id" "$return_cleanup_pathspec" || {
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
   }
