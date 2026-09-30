@@ -414,9 +414,10 @@ fm_task_inbox_claude_dialog_guard() {  # <backend> <target> <record-path> [expec
 # re-rings later, FM_TASK_INBOX_RING_NOTICE says what the guard did, and the
 # guard paragraph in the header owns the contract. No return value
 # is delivery proof; the acknowledgement move is the only delivery signal.
-# The skip is deliberately narrow: only an exact `pending` verdict can defer,
+# The composer skip is narrow: only an exact `pending` verdict can defer,
 # because there our Enter could submit someone's real half-typed content.
-# `pending-unproven` and `unknown` still ring - the worst outcome is a garbled
+# After the Claude pane guard permits typing, `pending-unproven` and `unknown`
+# still ring - the worst outcome is a garbled
 # CONSTANT line the worker recovers semantically, while skipping on ambiguous
 # verdicts would starve a harness whose idle screen the classifier cannot
 # positively identify (that classifier is advisory here by design).
