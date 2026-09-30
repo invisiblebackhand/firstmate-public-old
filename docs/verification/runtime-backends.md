@@ -976,7 +976,9 @@ The portable regressions in `tests/fm-task-inbox.test.sh` and `tests/fm-send-inb
 A pane that quotes one of the strings while its worker reads idle, such as a worker that has just printed this repository's own source, is treated as the dialog: the ring defers and Escape is sent.
 Nothing is typed in that case, Escape reaches only a worker whose semantic busy state reads idle, and a steer that cannot be delivered surfaces through the ladder's ordinary stale wake, which names the dialog.
 The typed plane is not guarded, so an operator's own `fm-send --key Enter` still does what it says.
-The remote secondmate leg shares the ring and prints the same notice, but no test drives that leg with a dialog on screen.
+The remote secondmate leg shares the ring and prints the same notices, but no test drives that leg with a dialog on screen or with a screen that cannot be read.
+The unreadable-screen hold in the `bin/fm-task-inbox-lib.sh` header decides from the backend's capture result alone, so it has no vendor string to refresh.
+The portable regressions drive a failing capture and an empty one through the tmux adapter over a fake pane, in both its viewport and bounded capture modes, and no live herdr, Zellij, Orca, or cmux run drives either signal.
 
 Refresh this section after any Claude Code upgrade by running the guard above.
 When it fails, read the release's strings again without opening the dialog, update `fm_task_inbox_claude_dialog_markers`, and record the new version and result here.

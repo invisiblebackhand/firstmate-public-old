@@ -31,7 +31,13 @@
 #      rings; Escape (Not now) goes through fm-control only for an idle worker;
 #      the record stays durable and is delivered once the dialog is gone; the
 #      watcher's stale wake names a dialog it could not cancel; every other
-#      pane rings as before.
+#      readable pane rings as before.
+#   8. A Claude pane whose screen cannot be read - the backend's capture fails
+#      or comes back empty - is held the same way but is never sent Escape
+#      either, since nothing shows what is on it; each held watcher attempt
+#      spends ladder budget, the record is delivered once the screen reads
+#      again, and the stale wake says the screen could not be read; the same
+#      unreadable screen on another harness rings as before.
 set -u
 
 # shellcheck source=tests/wake-helpers.sh
@@ -826,7 +832,9 @@ DIALOG_SCAN_ROW='Scanning your repo and recent sessions'
 
 # dialog_screen <name>: the text of one screen on stdout. Every dialog screen
 # carries exactly one of the four strings, so a guard verdict on it can only
-# have come from that string.
+# have come from that string. The others carry none: bare-prompt is the sparsest
+# screen that still shows something, while blank (whitespace only) and empty
+# (nothing at all) show nothing the guard could read.
 dialog_screen() {
   local rule
   rule=$(printf '─%.0s' $(seq 64))
@@ -838,6 +846,9 @@ dialog_screen() {
     wrapped-title) printf '● done\n\n  Teach auto mode about\n      your environment?\n\n  ❯ 1. Yes\n' ;;
     auto-mode-footer) printf '● done\n%s\n❯ \n%s\n  ⏵⏵ auto mode on (shift+tab to cycle)\n' "$rule" "$rule" ;;
     near-miss) printf '● done\n%s\n❯ \n%s\n  Teach auto mode about your\n' "$rule" "$rule" ;;
+    bare-prompt) printf '\n\n  ❯\n' ;;
+    blank) printf '\n   \n\n \t\n' ;;
+    empty) ;;
   esac
 }
 
@@ -878,20 +889,23 @@ dialog_case() {  # <name> <screen> [harness] [busy: idle|busy|unknown|none] -> e
 # Ring the case's record once through the production ring and print its return
 # code. The notice the ring left in FM_TASK_INBOX_RING_NOTICE goes to
 # <dir>/notice, and FM_HOME is left unset so the guard has to find the home
-# itself, as the watcher does.
-dialog_ring() {  # <dir>
-  local dir=$1 rc=0
+# itself, as the watcher does. `bounded` makes the guard read the screen the way
+# a backend with no viewport-only capture does (cmux and orca), by emptying the
+# list of backends that have one once the library is sourced.
+dialog_ring() {  # <dir> [viewport|bounded]
+  local dir=$1 view=${2:-viewport} rc=0
   (
     unset FM_HOME
     PATH="$dir/fakebin:$PATH" FM_FAKE_PANE_DIR="$dir/pane" \
       FM_STATE_OVERRIDE="$dir/state" FM_CONTROL_POLL=0.01 FM_CONTROL_SETTLE_WAIT=0.05 \
       bash -c '
         . "$1"
+        [ "$4" != bounded ] || FM_BACKEND_VISIBLE_CAPTURE=
         fm_task_inbox_ring tmux fmses:fm-t1 "$2" fm-t1
         rc=$?
         printf "%s" "$FM_TASK_INBOX_RING_NOTICE" > "$3"
         exit "$rc"
-      ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$dir/state/t1.inbox/001.msg" "$dir/notice"
+      ' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$dir/state/t1.inbox/001.msg" "$dir/notice" "$view"
   ) || rc=$?
   printf '%s' "$rc"
 }
@@ -986,21 +1000,23 @@ test_dialog_guard_reports_a_failed_escape() {
 }
 
 test_dialog_guard_leaves_every_other_pane_alone() {
-  local screen dir rc
-  for screen in composer auto-mode-footer near-miss; do
-    dir=$(dialog_case "dialog-quiet-$screen" "$screen")
-    [ "$(dialog_strings_on "$(dialog_screen "$screen")")" = 0 ] \
-      || fail "the $screen screen must carry none of the dialog strings"
-    rc=$(dialog_ring "$dir")
-    [ "$rc" = 0 ] || fail "$screen: an ordinary Claude pane should still be rung, got $rc"
-    [ "$(pane_file "$dir" literal | grep -cF 'Firstmate instruction waiting')" = 1 ] \
-      || fail "$screen: the doorbell was not typed:"$'\n'"$(pane_file "$dir" literal)"
-    case "$(pane_file "$dir" keys)" in
-      *Escape*) fail "$screen: an ordinary pane must never be sent Escape" ;;
-    esac
-    [ -z "$(cat "$dir/notice")" ] || fail "$screen: an ordinary ring must leave no dialog notice"
+  local view screen dir rc
+  for view in viewport bounded; do
+    for screen in composer auto-mode-footer near-miss bare-prompt; do
+      dir=$(dialog_case "dialog-quiet-$view-$screen" "$screen")
+      [ "$(dialog_strings_on "$(dialog_screen "$screen")")" = 0 ] \
+        || fail "the $screen screen must carry none of the dialog strings"
+      rc=$(dialog_ring "$dir" "$view")
+      [ "$rc" = 0 ] || fail "$view/$screen: an ordinary Claude pane should still be rung, got $rc"
+      [ "$(pane_file "$dir" literal | grep -cF 'Firstmate instruction waiting')" = 1 ] \
+        || fail "$view/$screen: the doorbell was not typed:"$'\n'"$(pane_file "$dir" literal)"
+      case "$(pane_file "$dir" keys)" in
+        *Escape*) fail "$view/$screen: an ordinary pane must never be sent Escape" ;;
+      esac
+      [ -z "$(cat "$dir/notice")" ] || fail "$view/$screen: an ordinary ring must leave no notice"
+    done
   done
-  pass "inbox: ordinary Claude panes, including auto mode's own status row and a near-miss, ring as before"
+  pass "inbox: readable Claude panes, including auto mode's own status row, a near-miss, and a lone prompt glyph, ring as before"
 }
 
 test_dialog_guard_reads_only_the_viewport() {
@@ -1035,17 +1051,104 @@ test_dialog_guard_covers_only_claude_targets() {
   pass "inbox: the dialog guard reads the task's harness and leaves every non-Claude target alone"
 }
 
-test_dialog_guard_stays_advisory_on_an_unreadable_screen() {
+# One task in <dir> whose screen the ring cannot read, in the two ways a backend
+# can fail to give one. `fail` is the capture command exiting nonzero with the
+# dialog really on the pane, the hazard the hold exists for; `empty` and `blank`
+# are a capture that succeeds with nothing on it, and with only whitespace.
+unreadable_case() {  # <name> <fail|empty|blank> [harness] [busy] -> echoes case dir
+  local name=$1 mode=$2 harness=${3:-claude} busy=${4:-idle} dir
+  case "$mode" in
+    fail)
+      dir=$(dialog_case "$name" title "$harness" "$busy")
+      touch "$dir/pane/capture-fail"
+      ;;
+    *) dir=$(dialog_case "$name" "$mode" "$harness" "$busy") ;;
+  esac
+  printf '%s\n' "$dir"
+}
+
+# Run the fake pane's capture as the ring does and check it is the kind of
+# unreadable the case claims, so a failing capture and a capture with nothing on
+# it stay two distinct signals and neither case goes quietly vacuous.
+assert_unreadable_capture() {  # <dir> <fail|empty|blank>
+  local dir=$1 mode=$2 out rc=0
+  out=$(PATH="$dir/fakebin:$PATH" FM_FAKE_PANE_DIR="$dir/pane" tmux capture-pane -p -t x -S -0) || rc=$?
+  case "$mode" in
+    fail)
+      [ "$rc" != 0 ] || fail "the $mode case must be a capture that fails, or it proves nothing"
+      [ "$(dialog_strings_on "$(cat "$dir/pane/pane")")" = 1 ] \
+        || fail "the $mode case must leave the dialog on a pane the capture cannot read, or it proves nothing"
+      ;;
+    *)
+      [ "$rc" = 0 ] || fail "the $mode case must be a capture that succeeds, or it proves nothing"
+      [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ] \
+        || fail "the $mode case must be a capture with nothing on it, or it proves nothing"
+      ;;
+  esac
+}
+
+test_dialog_guard_holds_a_claude_screen_it_cannot_read() {
+  local view mode dir rc notice
+  for view in viewport bounded; do
+    for mode in fail empty blank; do
+      dir=$(unreadable_case "unreadable-$view-$mode" "$mode")
+      assert_unreadable_capture "$dir" "$mode"
+      rc=$(dialog_ring "$dir" "$view")
+      [ "$rc" = 5 ] || fail "$view/$mode: a Claude screen that cannot be read should hold the ring with 5, got $rc"
+      [ -z "$(pane_file "$dir" literal)" ] \
+        || fail "$view/$mode: text was typed onto a screen nothing could read:"$'\n'"$(pane_file "$dir" literal)"
+      [ -z "$(pane_file "$dir" submits)" ] || fail "$view/$mode: something was submitted onto a screen nothing could read"
+      [ -z "$(pane_file "$dir" keys)" ] \
+        || fail "$view/$mode: no key, Enter and Escape included, may reach a screen nothing could read, got: $(pane_file "$dir" keys | tr '\n' ' ')"
+      [ -f "$dir/state/t1.inbox/001.msg" ] || fail "$view/$mode: holding the ring must leave the durable record in place"
+      notice=$(cat "$dir/notice")
+      assert_contains "$notice" "task t1" "$view/$mode: the notice must name the task"
+      assert_contains "$notice" "screen could not be read" "$view/$mode: the notice must say the screen could not be read"
+      assert_contains "$notice" "no text, no Enter, and no Escape were sent" "$view/$mode: the notice must say nothing was sent"
+      assert_not_contains "$notice" "auto-mode setup dialog" "$view/$mode: nobody saw a dialog, so the notice must not name one"
+    done
+  done
+  pass "inbox: a Claude pane whose screen cannot be read, failed or empty, is never typed into, sent Enter, or sent Escape"
+}
+
+test_dialog_guard_defers_an_unreadable_screen_then_delivers_once_it_reads() {
   local dir rc
-  dir=$(dialog_case dialog-unreadable title)
+  dir=$(dialog_case unreadable-recovers composer)
   touch "$dir/pane/capture-fail"
   rc=$(dialog_ring "$dir")
-  [ "$rc" != 4 ] || fail "a screen that cannot be read cannot show the dialog, so the guard must not claim it did"
-  [ -z "$(cat "$dir/notice")" ] || fail "an unreadable screen must leave no dialog notice"
-  case "$(pane_file "$dir" keys)" in
-    *Escape*) fail "Escape was pressed on a screen nothing could read" ;;
+  [ "$rc" = 5 ] || fail "the first ring should hold on the unreadable screen, got $rc"
+  [ -z "$(pane_file "$dir" literal)" ] || fail "text was typed before the screen could be read"
+  rm -f "$dir/pane/capture-fail"
+  rc=$(dialog_ring "$dir")
+  [ "$rc" = 0 ] || fail "the next ring, with the screen readable again, should deliver, got $rc"
+  [ "$(pane_file "$dir" literal | grep -cF 'Firstmate instruction waiting')" = 1 ] \
+    || fail "the doorbell should be typed exactly once, after the screen read again:"$'\n'"$(pane_file "$dir" literal)"
+  [ "$(pane_file "$dir" keys | tr '\n' ' ')" = 'Enter ' ] \
+    || fail "expected only the doorbell's Enter and never Escape, got: $(pane_file "$dir" keys | tr '\n' ' ')"
+  case "$(pane_file "$dir" submits)" in
+    *'Firstmate instruction waiting'*) ;;
+    *) fail "the deferred steer's doorbell was never submitted" ;;
   esac
-  pass "inbox: the dialog guard is advisory like the composer pre-check when the screen cannot be read"
+  [ -f "$dir/state/t1.inbox/001.msg" ] || fail "the record is the worker's to acknowledge, not the ring's"
+  [ -z "$(cat "$dir/notice")" ] || fail "a ring that delivers must leave no notice"
+  pass "inbox: a steer held on an unreadable screen is delivered by the next ring once the screen reads again"
+}
+
+test_dialog_guard_rings_an_unreadable_screen_as_before_on_non_claude_targets() {
+  local mode dir rc
+  for mode in fail empty blank; do
+    dir=$(unreadable_case "unreadable-codex-$mode" "$mode" codex)
+    assert_unreadable_capture "$dir" "$mode"
+    rc=$(dialog_ring "$dir")
+    [ "$rc" = 0 ] || fail "$mode: a non-Claude harness's unreadable screen should still be rung, got $rc"
+    [ "$(pane_file "$dir" literal | grep -cF 'Firstmate instruction waiting')" = 1 ] \
+      || fail "$mode: the non-Claude harness's doorbell was not typed:"$'\n'"$(pane_file "$dir" literal)"
+    case "$(pane_file "$dir" keys)" in
+      *Escape*) fail "$mode: a non-Claude harness was sent Escape" ;;
+    esac
+    [ -z "$(cat "$dir/notice")" ] || fail "$mode: a non-Claude harness's ring must leave no notice"
+  done
+  pass "inbox: an unreadable screen on a non-Claude harness is rung as before"
 }
 
 # A real watcher subprocess over the same fake pane. The pane is Claude at a
@@ -1136,6 +1239,65 @@ test_watcher_escalation_names_a_dialog_it_could_not_cancel() {
   pass "watcher: a stale wake for a steer stuck behind a Claude dialog names the dialog and the safe key"
 }
 
+test_watcher_holds_an_unreadable_claude_screen_without_waking_firstmate() {
+  local dir out pid i=0 ladder
+  dir=$(unreadable_case unreadable-watch-stuck fail)
+  out="$dir/watch.out"
+  age_path "$dir/state/t1.inbox/001.msg"
+  dialog_watch "$dir" "$out" FM_TASK_INBOX_RING_MAX=99
+  pid=$!
+  while [ "$i" -lt 300 ]; do
+    [ -s "$dir/state/t1.inbox/.ring-state" ] && break
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  sleep 2.5
+  kill -0 "$pid" 2>/dev/null \
+    || fail "a held re-ring attempt must not wake firstmate (watcher exited):"$'\n'"$(cat "$out")"
+  kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+  ladder=$(cat "$dir/state/t1.inbox/.ring-state" 2>/dev/null || true)
+  [ -n "$ladder" ] || fail "the watcher never attempted a delivery to an aged steer"
+  [ "$(printf '%s' "$ladder" | cut -f2)" -ge 1 ] \
+    || fail "a held attempt must spend ladder budget, got: $ladder"
+  [ -z "$(pane_file "$dir" literal)" ] \
+    || fail "the watcher typed onto a screen nothing could read:"$'\n'"$(pane_file "$dir" literal)"
+  [ -z "$(pane_file "$dir" keys)" ] \
+    || fail "the watcher pressed a key on a screen nothing could read, got: $(pane_file "$dir" keys | tr '\n' ' ')"
+  [ ! -s "$dir/state/.wake-queue" ] \
+    || fail "a held attempt queued a wake:"$'\n'"$(cat "$dir/state/.wake-queue")"
+  [ -f "$dir/state/t1.inbox/001.msg" ] || fail "the record must stay durable"
+  grep -qF 'screen could not be read' "$dir/state/.watch-triage.log" \
+    || fail "the watcher's triage log should say the screen could not be read:"$'\n'"$(cat "$dir/state/.watch-triage.log" 2>/dev/null)"
+  pass "watcher: an aged steer on a Claude screen nothing could read spends ring budget and is never typed, without waking firstmate"
+}
+
+test_watcher_escalation_names_a_screen_it_could_not_read() {
+  local dir out pid rec ladder
+  dir=$(unreadable_case unreadable-watch-escalate fail)
+  out="$dir/watch.out"
+  rec="$dir/state/t1.inbox/001.msg"
+  age_path "$rec"
+  dialog_watch "$dir" "$out" FM_TASK_INBOX_RING_MAX=1
+  pid=$!
+  wait_watcher_gone "$pid" 300 \
+    || { kill "$pid" 2>/dev/null; fail "the watcher never escalated a steer held on a screen it could not read"; }
+  ladder=$(cat "$dir/state/t1.inbox/.ring-state" 2>/dev/null || true)
+  [ "$(printf '%s' "$ladder" | cut -f2)" = 1 ] \
+    || fail "the single held attempt should have spent the whole budget, got: $ladder"
+  [ -z "$(pane_file "$dir" literal)" ] || fail "the watcher typed onto a screen nothing could read"
+  [ -z "$(pane_file "$dir" keys)" ] \
+    || fail "the watcher pressed a key on a screen nothing could read, got: $(pane_file "$dir" keys | tr '\n' ' ')"
+  [ "$(grep -cF 'unread firstmate instruction' "$dir/state/.wake-queue")" = 1 ] \
+    || fail "the escalation must fire exactly once:"$'\n'"$(cat "$dir/state/.wake-queue" 2>/dev/null)"
+  grep -qF "$rec" "$dir/state/.wake-queue" || fail "the stale wake should name the record path"
+  grep -qF 'screen could not be read' "$dir/state/.wake-queue" \
+    || fail "the stale wake should say the screen could not be read:"$'\n'"$(cat "$dir/state/.wake-queue")"
+  assert_no_grep 'auto-mode setup dialog' "$dir/state/.wake-queue" "the stale wake must not name a dialog nobody saw"
+  grep -qF 'stale:' "$out" || fail "the watcher should exit through the ordinary stale wake:"$'\n'"$(cat "$out")"
+  pass "watcher: a steer held on a Claude screen nothing could read escalates once as an ordinary stale wake that says so"
+}
+
 test_write_is_durable_and_exact
 test_doorbell_is_a_shell_noop
 test_doorbell_rejects_terminal_controls
@@ -1164,7 +1326,11 @@ test_dialog_guard_reports_a_failed_escape
 test_dialog_guard_leaves_every_other_pane_alone
 test_dialog_guard_reads_only_the_viewport
 test_dialog_guard_covers_only_claude_targets
-test_dialog_guard_stays_advisory_on_an_unreadable_screen
+test_dialog_guard_rings_an_unreadable_screen_as_before_on_non_claude_targets
+test_dialog_guard_holds_a_claude_screen_it_cannot_read
+test_dialog_guard_defers_an_unreadable_screen_then_delivers_once_it_reads
 test_watcher_never_rings_a_claude_dialog
 test_watcher_delivers_after_the_dialog_is_dismissed
 test_watcher_escalation_names_a_dialog_it_could_not_cancel
+test_watcher_holds_an_unreadable_claude_screen_without_waking_firstmate
+test_watcher_escalation_names_a_screen_it_could_not_read
