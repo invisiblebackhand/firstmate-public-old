@@ -400,6 +400,136 @@ SH
   chmod +x "$fakebin/tmux"
 }
 
+# The four strings the auto-mode setup dialog guard matches on, written out here
+# independently of bin/fm-task-inbox-lib.sh so a change to either side fails a
+# test instead of passing quietly.
+FM_TEST_DIALOG_TITLE='Teach auto mode about your environment?'
+FM_TEST_DIALOG_OFFER_BODY='Auto mode works better when it knows your environment'
+FM_TEST_DIALOG_CONFIRM_BODY='Claude Code reads this project, your recent Claude sessions'
+FM_TEST_DIALOG_SCAN_ROW='Scanning your repo and recent sessions'
+
+# fm_test_claude_dialog_screen <name>
+# One Claude screen on stdout, for the fake Claude pane's `pane` file. The
+# dialog screens follow the UI structure docs/verification/runtime-backends.md
+# "Claude auto-mode setup dialog markers" derives from Claude Code's own
+# component code: a frame rule, the title and body, numbered option rows with
+# the focus pointer, and a footer hint row. The real dialog is never opened to
+# get them, because opening it sends transcript-derived material to a model.
+# Every screen that shows a dialog carries exactly ONE of the four strings
+# above and rewords the rest, as a vendor rewording would leave them, so a
+# verdict on it can only have come from that string; `offer` is the whole
+# dialog and carries two. The confirm step's form rows, the status view's
+# elapsed-time subtitle, and the quoted notes are stand-ins, not claims about
+# Claude's exact text.
+#   real dialog, classic layout:    title offer-body confirm-body scan-row
+#                                   scan-row-wrapped scan-message-wrapped
+#                                   scan-message-wrapped-ascii scan-hint-wrapped
+#                                   scan-hint-wrapped-ascii scan-both-wrapped
+#                                   scan-both-wrapped-ascii scan-status wrapped-title offer
+#   real dialog, other layouts:     title-fullscreen title-no-frame title-no-footer
+#                                   scan-status-fullscreen scan-status-no-frame
+#   a string quoted in ordinary output, no dialog on the screen:
+#                                   quoted-title quoted-title-at-row-start
+#                                   quoted-offer-body quoted-confirm-body
+#                                   quoted-scan-row quoted-scan-row-at-row-start
+#                                   quoted-scan-row-bullet quoted-scan-row-bullet-wrapped
+#                                   rule-then-title
+#                                   rule-then-scan-status status-then-scan-status
+#                                   mock-in-output quoted-in-other-dialog
+#   a quote above a real dialog:    quote-above-dialog
+#   nothing to match:               auto-mode-footer near-miss bare-prompt blank empty
+fm_test_claude_dialog_screen() {
+  local rule full idle opts foot reworded note dash status1 status2 statusfoot
+  rule=$(printf '─%.0s' $(seq 64))
+  full=$(printf '▔%.0s' $(seq 64))
+  idle=$(printf '%s\n❯ \n%s\n  ? for shortcuts' "$rule" "$rule")
+  opts=$'  ❯ 1. Yes\n    2. Not now\n    3. Don\'t show again'
+  foot='  Enter to confirm · Esc to cancel'
+  reworded='  Set up auto mode for this project. Takes about a minute.'
+  note=$'  Learnings\n  - Claude Code can offer the auto-mode setup dialog ("'"$FM_TEST_DIALOG_TITLE"$'")\n    at the end of a turn; the launch setting turns that offer off for workers.'
+  dash=$(printf '\342\200\224')
+  status1="  $FM_TEST_DIALOG_SCAN_ROW, then drafting an auto-mode"
+  status2="  proposal. The review will pop up when it’s ready."
+  statusfoot='  ← to go back · Esc/Enter/Space to close · x to stop'
+  case "$1" in
+    title)
+      printf '● done\n\n%s\n  %s\n\n%s\n\n%s\n\n%s\n' "$rule" "$FM_TEST_DIALOG_TITLE" "$reworded" "$opts" "$foot" ;;
+    offer)
+      printf '● done\n\n%s\n  %s\n\n  %s. Takes about a minute.\n\n%s\n\n%s\n' \
+        "$rule" "$FM_TEST_DIALOG_TITLE" "$FM_TEST_DIALOG_OFFER_BODY" "$opts" "$foot" ;;
+    offer-body)
+      printf '● done\n\n%s\n  Teach auto mode about your setup?\n\n  %s. Takes about a minute.\n\n%s\n\n%s\n' \
+        "$rule" "$FM_TEST_DIALOG_OFFER_BODY" "$opts" "$foot" ;;
+    wrapped-title)
+      printf '● done\n\n%s\n  Teach auto mode about\n  your environment?\n\n%s\n\n%s\n\n%s\n' "$rule" "$reworded" "$opts" "$foot" ;;
+    confirm-body)
+      printf '● done\n\n%s\n  Set up auto mode for this project?\n\n  %s, and optionally\n  your shell history and other repositories. Claude analyzes this data and\n  customizes auto mode to make better decisions.\n\n  How you use Claude here   Mixed\n  Also scan shell history   on\n  Also scan your other repos   off\n\n  Continue\n\n  ←/→ to change usage · Enter to continue · Esc to cancel\n' \
+        "$rule" "$FM_TEST_DIALOG_CONFIRM_BODY" ;;
+    scan-row)
+      printf '● done\n\n✻  %s…\nthen drafting a proposal %s this can take a moment (Esc to cancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
+    scan-row-wrapped)
+      printf '● done\n\n✻  %s…\nthen drafting a proposal %s this can take\na moment (Esc to cancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
+    scan-message-wrapped)
+      printf '● done\n\n✻ Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to cancel)\n' "$dash" ;;
+    scan-message-wrapped-ascii)
+      printf '● done\n\n* Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to cancel)\n' "$dash" ;;
+    scan-hint-wrapped)
+      printf '● done\n\n✻ %s…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
+    scan-hint-wrapped-ascii)
+      printf '● done\n\n* %s…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$FM_TEST_DIALOG_SCAN_ROW" "$dash" ;;
+    scan-both-wrapped)
+      printf '● done\n\n✻ Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$dash" ;;
+    scan-both-wrapped-ascii)
+      printf '● done\n\n* Scanning your repo and\nrecent sessions…\nthen drafting a proposal %s this can take a moment (Esc to\ncancel)\n' "$dash" ;;
+    scan-status)
+      printf '● done\n\n%s\n  Auto-mode setup scan\n  1m 12s\n\n  Status: running\n\n%s\n%s\n\n%s\n' "$rule" "$status1" "$status2" "$statusfoot" ;;
+    scan-status-fullscreen)
+      printf '● done\n\n%s\n Auto-mode setup scan\n 0m 40s\n\n Status: running\n\n%s\n%s\n\n Esc/Enter/Space to close · x to stop\n' "$full" "$status1" "$status2" ;;
+    scan-status-no-frame)
+      printf '● done\n\n Auto-mode setup scan\n 0m 40s\n\n Status: running\n\n%s\n%s\n\n Esc/Enter/Space to close · x to stop\n' "$status1" "$status2" ;;
+    title-fullscreen)
+      printf '● done\n\n%s\n Teach auto mode about your environment?\n\n Set up auto mode for this project. Takes about a minute.\n\n ❯ 1. Yes\n   2. Not now\n   3. Don\x27t show again\n\n Enter to confirm · Esc to cancel\n' "$full" ;;
+    title-no-frame)
+      printf '● done\n\n Teach auto mode about your environment?\n\n Set up auto mode for this project. Takes about a minute.\n\n ❯ 1. Yes\n   2. Not now\n   3. Don\x27t show again\n\n Enter to confirm · Esc to cancel\n' ;;
+    title-no-footer)
+      printf '● done\n\n%s\n  %s\n\n%s\n\n%s\n\n  Press Ctrl-C again to cancel\n' "$rule" "$FM_TEST_DIALOG_TITLE" "$reworded" "$opts" ;;
+    quoted-title)
+      printf '● done\n\n%s\n\n%s\n' "$note" "$idle" ;;
+    quoted-title-at-row-start)
+      printf '● done\n\n%s is the title of the offer that the launch setting turns off.\n\n%s\n' "$FM_TEST_DIALOG_TITLE" "$idle" ;;
+    quoted-offer-body)
+      printf '● done\n\n  - The offer reads "%s. Takes about a minute."\n\n%s\n' "$FM_TEST_DIALOG_OFFER_BODY" "$idle" ;;
+    quoted-confirm-body)
+      printf '● done\n\n  - The wizard says: %s, and optionally\n    your shell history.\n\n%s\n' "$FM_TEST_DIALOG_CONFIRM_BODY" "$idle" ;;
+    quoted-scan-row)
+      printf '● done\n\n  - While it runs the status row shows "%s…" until it ends.\n\n%s\n' "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
+    quoted-scan-row-at-row-start)
+      printf '● done\n\n  - %s… appears while it runs.\n  - It stops when the proposal is ready.\n\n%s\n' "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
+    quoted-scan-row-bullet)
+      printf '● done\n\n  - %s…\n  - Esc to cancel stops it.\n\n%s\n' "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
+    quoted-scan-row-bullet-wrapped)
+      printf '● done\n\n  - Scanning your repo and\n    recent sessions…\n  Esc to cancel stops it.\n\n%s\n' "$idle" ;;
+    rule-then-scan-status)
+      printf '● done\n\n%s\n%s, then drafting an auto-mode proposal is what the dialog says.\n\n%s\n' "$rule" "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
+    status-then-scan-status)
+      printf '● done\n\n  Status: running\n\n%s, then drafting an auto-mode proposal.\n\n%s\n' "$FM_TEST_DIALOG_SCAN_ROW" "$idle" ;;
+    rule-then-title)
+      printf '● done\n\n%s\n%s is covered in docs/configuration.md.\n\n%s\n' "$rule" "$FM_TEST_DIALOG_TITLE" "$idle" ;;
+    mock-in-output)
+      printf '● done\n\n  Here is what the offer looks like:\n\n  %s\n  ❯ 1. Yes\n    2. Not now\n    3. Don\x27t show again\n\n%s\n' "$FM_TEST_DIALOG_TITLE" "$idle" ;;
+    quoted-in-other-dialog)
+      printf '● done\n\n%s\n  Bash command\n\n    grep -rn "%s" docs\n\n  Do you want to proceed?\n  ❯ 1. Yes\n    2. Yes, and don\x27t ask again for grep commands\n    3. No, and tell Claude what to do differently (esc)\n' \
+        "$rule" "$FM_TEST_DIALOG_TITLE" ;;
+    quote-above-dialog)
+      printf '● done\n\n%s\n\n%s\n  %s\n\n%s\n\n%s\n\n%s\n' "$note" "$rule" "$FM_TEST_DIALOG_TITLE" "$reworded" "$opts" "$foot" ;;
+    auto-mode-footer) printf '● done\n%s\n❯ \n%s\n  ⏵⏵ auto mode on (shift+tab to cycle)\n' "$rule" "$rule" ;;
+    near-miss) printf '● done\n%s\n❯ \n%s\n  Teach auto mode about your\n' "$rule" "$rule" ;;
+    bare-prompt) printf '\n\n  ❯\n' ;;
+    blank) printf '\n   \n\n \t\n' ;;
+    empty) ;;
+  esac
+}
+
 # fm_test_fake_ssh <fakebin> [name]
 # Records argv to FM_SSH_LOG, consumes stdin, exits FM_FAKE_SSH_RC (default 0).
 # Default name is fake-ssh so tests can point FM_SSH_BIN at it without

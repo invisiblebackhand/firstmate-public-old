@@ -28,7 +28,10 @@
 #  11. A Claude worker parked at its auto-mode setup dialog is never typed
 #      into: the steer is still recorded and sent, Escape reaches an idle
 #      worker only, the stderr notice names the task and the dialog, and a
-#      later steer rings normally once the dialog is gone.
+#      later steer rings normally once the dialog is gone. A pane that only
+#      quotes the dialog's words, with no dialog on it, is rung as before, and
+#      the same words quoted above a real dialog still hold it. The scan's
+#      status view, a dialog of its own, is held the same way.
 #  12. A Claude worker whose screen cannot be read is held the same way, but
 #      never sent Escape even when idle: the steer is still recorded and sent,
 #      the stderr notice names the task and says the screen could not be read,
@@ -427,9 +430,10 @@ test_empty_message_refused() {
 # auto-mode setup dialog: the endpoint identity fm-control validates before it
 # presses a key, a semantic busy record (or none), and the dialog on screen.
 # `unreadable` leaves the dialog up but makes the pane's capture fail, the
-# hazard a screen nothing can read hides. The pane files in <dir>/pane record
-# every byte and key that arrives.
-dialog_send_case() { # <name> <idle|none> [harness] [dialog|unreadable] -> echoes case dir
+# hazard a screen nothing can read hides; any other <screen> is a
+# fm_test_claude_dialog_screen name. The pane files in <dir>/pane record every
+# byte and key that arrives.
+dialog_send_case() { # <name> <idle|none> [harness] [dialog|unreadable|screen] -> echoes case dir
   local name=$1 busy=$2 harness=${3:-claude} screen=${4:-dialog} dir
   dir="$TMP_ROOT/$name"
   mkdir -p "$dir/home/state" "$dir/fakebin" "$dir/pane" "$dir/proj" "$dir/wt"
@@ -439,8 +443,10 @@ dialog_send_case() { # <name> <idle|none> [harness] [dialog|unreadable] -> echoe
     "mode=no-mistakes" "yolo=off"
   [ "$busy" = none ] || "$ROOT/bin/fm-busy-event.sh" arm "$dir/home/state" t1 \
     --state "$busy" --source claude-hook --event stop >/dev/null
-  printf '%s\n' '● done' '' '  Teach auto mode about your environment?' '' \
-    '  ❯ 1. Yes' '    2. Not now' >"$dir/pane/pane"
+  case "$screen" in
+  dialog | unreadable) fm_test_claude_dialog_screen title >"$dir/pane/pane" ;;
+  *) fm_test_claude_dialog_screen "$screen" >"$dir/pane/pane" ;;
+  esac
   [ "$screen" != unreadable ] || touch "$dir/pane/capture-fail"
   printf '%s\n' "$dir"
 }
@@ -509,6 +515,67 @@ test_next_steer_rings_once_the_dialog_is_gone() {
   keys=$(tr '\n' ' ' <"$dir/pane/keys")
   [ "$keys" = 'Escape Enter ' ] || fail "expected Escape, then Enter only after the dialog was gone, got: $keys"
   pass "fm-send inbox: the next steer rings normally once the dialog is gone, and the earlier record stays durable"
+}
+
+# The reported path through fm-send itself: a pane that only prints a note
+# quoting the dialog's title has no dialog on it, so the doorbell must ring.
+test_claude_pane_that_only_quotes_the_dialog_still_gets_the_doorbell() {
+  local dir err rc body keys
+  dir=$(dialog_send_case quoted-rings idle claude quoted-title)
+  err="$dir/send.err"
+  dialog_send "$dir" "$err" "please rebase onto main"
+  rc=$?
+  expect_code 0 "$rc" "a steer to a worker whose pane only quotes the dialog is an ordinary sent steer"
+  body=$(record_body _ "$dir/home/state/t1.inbox/001.msg")
+  [ "$body" = "please rebase onto main" ] || fail "the steer was not durably recorded intact: $body"
+  assert_contains "$(cat "$dir/pane/submits")" "Firstmate instruction waiting" \
+    "the doorbell should be submitted to a pane with no dialog on it"
+  keys=$(tr '\n' ' ' <"$dir/pane/keys")
+  [ "$keys" = 'Enter ' ] || fail "expected only the doorbell's Enter and never Escape, got: $keys"
+  case "$(cat "$err")" in
+  *"doorbell not typed"*) fail "a pane with no dialog on it was held:"$'\n'"$(cat "$err")" ;;
+  esac
+  pass "fm-send inbox: a pane that only quotes the dialog's title rings normally and is never sent Escape"
+}
+
+test_claude_dialog_under_a_quote_still_defers_the_doorbell() {
+  local dir err rc notice keys
+  dir=$(dialog_send_case quote-and-dialog idle claude quote-above-dialog)
+  err="$dir/send.err"
+  dialog_send "$dir" "$err" "please rebase onto main"
+  rc=$?
+  expect_code 0 "$rc" "a steer to a worker parked at Claude's dialog is still a sent steer"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "the steer was not durably recorded"
+  [ ! -s "$dir/pane/literal" ] ||
+    fail "text was typed onto the dialog:"$'\n'"$(cat "$dir/pane/literal")"
+  keys=$(tr '\n' ' ' <"$dir/pane/keys" 2>/dev/null)
+  [ "$keys" = 'Escape ' ] || fail "only Escape, Not now, may reach the dialog, got: $keys"
+  notice=$(cat "$err")
+  assert_contains "$notice" "fm-send: doorbell not typed" "the notice should say the doorbell was skipped"
+  assert_contains "$notice" "auto-mode setup dialog" "the notice should name the dialog"
+  pass "fm-send inbox: a real dialog under a quote of its own title still skips the doorbell"
+}
+
+# The scan's own status view (opened from the background task list) is a real
+# dialog too, and Space and Enter close it while x stops the scan, so the
+# doorbell must not be typed into it.
+test_claude_scan_status_view_defers_the_doorbell() {
+  local dir err rc notice keys
+  dir=$(dialog_send_case scan-status-defer idle claude scan-status)
+  err="$dir/send.err"
+  dialog_send "$dir" "$err" "please rebase onto main"
+  rc=$?
+  expect_code 0 "$rc" "a steer to a worker parked at the scan's status view is still a sent steer"
+  [ -f "$dir/home/state/t1.inbox/001.msg" ] || fail "the steer was not durably recorded"
+  [ ! -s "$dir/pane/literal" ] ||
+    fail "text was typed onto the status view:"$'\n'"$(cat "$dir/pane/literal")"
+  keys=$(tr '\n' ' ' <"$dir/pane/keys" 2>/dev/null)
+  [ "$keys" = 'Escape ' ] || fail "only Escape may reach the status view, got: $keys"
+  notice=$(cat "$err")
+  assert_contains "$notice" "fm-send: doorbell not typed" "the notice should say the doorbell was skipped"
+  assert_contains "$notice" "auto-mode setup dialog" "the notice should name the dialog"
+  assert_contains "$notice" "\"$FM_TEST_DIALOG_SCAN_ROW\"" "the notice should name the scan string that matched"
+  pass "fm-send inbox: the scan's status view skips the doorbell and is cancelled with Escape"
 }
 
 test_claude_unreadable_screen_holds_the_doorbell_and_reports_it() {
@@ -591,6 +658,9 @@ test_empty_message_refused
 test_claude_dialog_defers_the_doorbell_and_reports_it
 test_claude_dialog_gets_no_key_when_the_worker_is_not_idle
 test_next_steer_rings_once_the_dialog_is_gone
+test_claude_pane_that_only_quotes_the_dialog_still_gets_the_doorbell
+test_claude_dialog_under_a_quote_still_defers_the_doorbell
+test_claude_scan_status_view_defers_the_doorbell
 test_claude_unreadable_screen_holds_the_doorbell_and_reports_it
 test_next_steer_rings_once_the_screen_is_readable
 test_unreadable_screen_still_rings_a_non_claude_target

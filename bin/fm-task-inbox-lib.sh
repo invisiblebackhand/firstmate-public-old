@@ -75,10 +75,11 @@
 #   a doorbell's Enter would accept an offer whose wizard then scans the
 #   project's recent session transcripts for a model request. A visible screen
 #   showing the dialog, or the wizard or scan screen that follows it, is
-#   therefore never typed into. Escape, the dialog's cancel key (Not now, never
-#   Yes), is delivered through bin/fm-control.sh's interrupt verb only when the
-#   worker's semantic busy state reads idle, because a busy turn that merely
-#   displays the same words must not be interrupted.
+#   therefore never typed into; fm_task_inbox_claude_dialog_markers owns what
+#   counts as showing it, and text that merely quotes the dialog does not.
+#   Escape, the dialog's cancel key (Not now, never Yes), is delivered through
+#   bin/fm-control.sh's interrupt verb only when the worker's semantic busy state
+#   reads idle, because a busy turn must not be interrupted.
 #   Unreadable screen (the ring returns 5): when the backend's own capture of
 #   the screen fails or comes back empty, nothing shows whether that dialog is
 #   up, so the ring holds the same way, and sends no Escape either because a key
@@ -87,8 +88,8 @@
 # bin/fm-spawn.sh's per-launch skillOverrides is the primary control for the
 # dialog; this guard backstops a worker launched without it.
 # docs/verification/runtime-backends.md "Claude auto-mode setup dialog markers"
-# records the evidence for the dialog strings and the live guard that refreshes
-# it.
+# records the evidence for the dialog's strings and UI structure and the live
+# guard that refreshes it.
 #
 # fm_task_inbox_ring requires bin/fm-backend.sh's dispatch (sourced below); the
 # other helpers are dependency-light. Sourced by bin/fm-send.sh, bin/fm-watch.sh,
@@ -306,35 +307,193 @@ fm_task_inbox_doorbell_line() {  # <record-path>
     "$quoted" "$quoted"
 }
 
-# The strings a Claude screen renders while its auto-mode setup dialog is up:
-# the offer's title (the wizard's confirm step reuses it), the offer's body, the
-# wizard confirm step's body, and the running scan's status row. Any ONE of them
-# on screen is a positive verdict, so a vendor rewording of a single string
-# cannot blind the guard. They come from Claude Code 2.1.284's own UI strings,
-# never from provoking the dialog: opening it, or running /auto-mode-setup,
-# would send transcript-derived material to a model.
-# tests/fm-claude-automode-dialog-live-e2e.test.sh fails, naming the installed
-# version, when the title is no longer in the installed binary.
+# What counts as Claude's auto-mode setup dialog being shown: the one statement
+# of this contract, which the header above, bin/fm-send.sh, bin/fm-watch.sh, and
+# the docs only point at. The guard must never type into the dialog, but a screen
+# that merely quotes its words without enough matching structure - a printed
+# learnings note or another dialog's command text - is not the dialog, and
+# holding the ring for one blocks a steer and makes the watcher's stale wake
+# name a dialog that is not there. So a string counts only inside the dialog's own UI structure, read
+# from the visible rows with whitespace folded, so a string the pane wrapped
+# still matches:
+#   head strings (the offer's title and body, the wizard confirm step's body)
+#     must BEGIN a row, and two of three structural signals must go with them: a
+#     frame rule (a row opening with eight or more `─` or `▔`) within eight rows
+#     above; two or more consecutive option rows with consecutive numbers and
+#     a focus pointer on any one (`❯ `, or `> ` where the terminal is not unicode)
+#     within 24 rows below, before any other rule; a footer hint row within the
+#     same bound (a row opening with a key hint, `<keys> to <action>`, that names
+#     Enter: `Enter to confirm`, `Enter to continue`
+#     after `←/→ to change usage`, `Esc/Enter/Space to close`) below, before any
+#     other rule.
+#   the scan string is read on the scan's two screens. In the wizard's spinner it
+#     must BEGIN a row, after at most one leading space-delimited spinner token
+#     (a token with no printable ASCII, or a lone `*`, never a list bullet),
+#     folding up to three following rows until the glyph-stripped message
+#     reaches the marker length. `Esc to cancel` must appear in up to four
+#     folded rows after the last consumed message row;
+#     both folds stop at a blank row or frame rule, so the message and the hint
+#     itself may wrap on a narrow pane. In the background-task status view it
+#     opens the body under a `Status: <state>` row, so it must BEGIN a row and
+#     two of three signals must go with it: a
+#     frame rule within eight rows above, a `Status: <state>` row within three
+#     rows above, a footer hint row within eight rows below, before any other
+#     rule.
+# Any one string that passes is a positive verdict, so a vendor rewording of
+# another cannot blind the guard. Two of the three signals, not all three,
+# because the shared dialog component draws its frame as `─` in the classic
+# layout and `▔` in the fullscreen modal, can be told to hide its frame or its
+# footer, and swaps the footer while an exit is pending: one absent signal must
+# not blind the guard. Quotes with insufficient structure do not match; a
+# pasted copy with enough matching structure is indistinguishable from the
+# dialog and holds the ring. The shapes come from Claude Code's own component
+# code, never from provoking the dialog: opening it, or running /auto-mode-setup,
+# would send transcript-derived
+# material to a model.
+# docs/verification/runtime-backends.md "Claude auto-mode setup dialog markers"
+# records what was derived, from which version, and what it leaves unchecked,
+# and tests/fm-claude-automode-dialog-live-e2e.test.sh fails, naming the
+# installed version, when the binary stops carrying these strings or shapes.
+#
+# One `<kind><TAB><string>` line each: `head` strings are the offer's title (the
+# wizard's confirm step reuses it), the offer's body, and the confirm step's
+# body; `scan` is the start of the running scan's message, on both its screens.
 fm_task_inbox_claude_dialog_markers() {
-  printf '%s\n' \
-    'Teach auto mode about your environment?' \
-    'Auto mode works better when it knows your environment' \
-    'Claude Code reads this project, your recent Claude sessions' \
-    'Scanning your repo and recent sessions'
+  printf '%s\t%s\n' \
+    head 'Teach auto mode about your environment?' \
+    head 'Auto mode works better when it knows your environment' \
+    head 'Claude Code reads this project, your recent Claude sessions' \
+    scan 'Scanning your repo and recent sessions'
+}
+
+# Print the first marker the screen on stdin shows inside its own UI structure
+# (the contract above), or fail. LC_ALL=C makes awk walk bytes, so the multibyte
+# glyphs match as literal byte strings in every locale.
+_fm_task_inbox_claude_dialog_match() {
+  FM_TASK_INBOX_DIALOG_MARKERS=$(fm_task_inbox_claude_dialog_markers) LC_ALL=C awk '
+    # Row t with up to three following rows folded in while the marker of length
+    # len is not yet whole, so a string the pane wrapped still matches.
+    function fold(t, len,   s, k) {
+      s = txt[t]
+      for (k = 1; k <= 3 && length(s) < len && t + k <= n; k++) {
+        if (txt[t + k] == "" || isrule[t + k]) break
+        s = s " " txt[t + k]
+      }
+      return s
+    }
+    # Whether a frame rule sits within eight rows above row t.
+    function ruleabove(t,   r) {
+      for (r = t - 1; r >= 1 && r >= t - 8; r--) if (isrule[r]) return 1
+      return 0
+    }
+    BEGIN {
+      nm = split(ENVIRON["FM_TASK_INBOX_DIALOG_MARKERS"], line, "\n")
+      for (i = 1; i <= nm; i++) {
+        tab = index(line[i], "\t")
+        kind[i] = substr(line[i], 1, tab - 1)
+        mark[i] = substr(line[i], tab + 1)
+      }
+      n = 0
+    }
+    {
+      row = $0
+      gsub(/\r/, "", row)
+      gsub("\302\240", " ", row)
+      gsub(/[ \t]+/, " ", row)
+      sub(/^ /, "", row)
+      sub(/ $/, "", row)
+      txt[++n] = row
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        row = txt[i]
+        run = 0
+        rest = row
+        while (substr(rest, 1, 3) == "─" || substr(rest, 1, 3) == "▔") { run++; rest = substr(rest, 4) }
+        isrule[i] = (run >= 8)
+        rest = row
+        ptr[i] = 0
+        if (substr(rest, 1, 4) == "❯ ") { ptr[i] = 1; rest = substr(rest, 5) }
+        else if (substr(rest, 1, 2) == "> ") { ptr[i] = 1; rest = substr(rest, 3) }
+        isopt[i] = (rest ~ /^[0-9]+\. [^ ]/)
+        if (isopt[i]) num[i] = rest + 0
+        isfoot[i] = (row ~ /^[^ ]+ to [a-z]/ && row ~ /(^|[ \/])Enter([ \/]|$)/)
+        isstatus[i] = (row ~ /^Status: [A-Za-z]/)
+      }
+      # Option rows count only as a run of two or more consecutive numbers that
+      # carries the focus pointer on one of them.
+      runs = 0
+      for (i = 1; i <= n; i++) {
+        if (!isopt[i]) continue
+        if (i > 1 && isopt[i - 1] && num[i - 1] + 1 == num[i]) rid[i] = rid[i - 1]
+        else rid[i] = ++runs
+        runlen[rid[i]]++
+        if (ptr[i]) runptr[rid[i]] = 1
+      }
+      for (i = 1; i <= n; i++) isselect[i] = (isopt[i] && runlen[rid[i]] >= 2 && runptr[rid[i]])
+      for (m = 1; m <= nm; m++) {
+        len = length(mark[m])
+        if (kind[m] == "head") {
+          for (t = 1; t <= n; t++) {
+            if (substr(fold(t, len), 1, len) != mark[m]) continue
+            options = 0
+            footer = 0
+            for (r = t + 1; r <= n && r <= t + 24; r++) {
+              if (isrule[r]) break
+              if (isselect[r]) options = 1
+              if (isfoot[r]) footer = 1
+            }
+            if (ruleabove(t) + options + footer >= 2) { print mark[m]; exit 0 }
+          }
+        } else if (kind[m] == "scan") {
+          for (t = 1; t <= n; t++) {
+            rest = txt[t]
+            if (match(rest, /^[^ ]+ /)) {
+              tok = substr(rest, 1, RLENGTH - 1)
+              if (tok == "*" || tok !~ /[!-~]/) rest = substr(rest, RLENGTH + 1)
+            }
+            last = t
+            for (k = 1; k <= 3 && length(rest) < len && t + k <= n; k++) {
+              if (txt[t + k] == "" || isrule[t + k]) break
+              rest = rest " " txt[t + k]
+              last = t + k
+            }
+            if (substr(rest, 1, len) == mark[m]) {
+              subtitle = ""
+              for (r = last + 1; r <= n && r <= last + 4; r++) {
+                if (txt[r] == "" || isrule[r]) break
+                subtitle = subtitle (subtitle == "" ? "" : " ") txt[r]
+              }
+              if (index(subtitle, "Esc to cancel") > 0) { print mark[m]; exit 0 }
+            }
+            if (substr(fold(t, len), 1, len) != mark[m]) continue
+            status = 0
+            for (r = t - 1; r >= 1 && r >= t - 3; r--) if (isstatus[r]) status = 1
+            footer = 0
+            for (r = t + 1; r <= n && r <= t + 8; r++) {
+              if (isrule[r]) break
+              if (isfoot[r]) footer = 1
+            }
+            if (ruleabove(t) + status + footer >= 2) { print mark[m]; exit 0 }
+          }
+        }
+      }
+      exit 1
+    }'
 }
 
 # Print the first marker on <target>'s visible screen when task <id> in
-# <state-dir> records a claude harness. Returns 0 with the marker printed, 1
-# when the task is not a Claude task or its screen shows no marker, and 2 when
-# it is a Claude task whose screen cannot be read: the backend's capture failed,
-# or came back with nothing on it once whitespace is folded away. Only a Claude
-# target is checked: the harness comes from the task's own meta, so a task with
-# no meta or another harness is never blamed for a dialog it cannot show, or for
-# a screen it cannot read. The viewport is read where the backend has a verified
+# <state-dir> records a claude harness and the screen shows it inside its own UI
+# structure. Returns 0 with the marker printed, 1 when the task is not a Claude
+# task or its screen shows no marker in that structure, and 2 when it is a Claude
+# task whose screen cannot be read: the backend's capture failed, or came back
+# with nothing on it once whitespace is folded away. Only a Claude target is
+# checked: the harness comes from the task's own meta, so a task with no meta or
+# another harness is never blamed for a dialog it cannot show, or for a screen
+# it cannot read. The viewport is read where the backend has a verified
 # viewport-only capture, so a dialog that was dismissed and scrolled away is
 # never mistaken for a live one; the others fall back to the composer
-# pre-check's bounded capture. Whitespace is folded first so a marker the pane
-# wrapped across rows still matches.
+# pre-check's bounded capture.
 fm_task_inbox_claude_dialog_shown() {  # <state-dir> <task-id> <backend> <target> [expected-label]
   local meta=$1/$2.meta screen flat marker
   [ -f "$meta" ] || return 1
@@ -349,12 +508,8 @@ fm_task_inbox_claude_dialog_shown() {  # <state-dir> <task-id> <backend> <target
   case "$flat" in
     ''|' ') return 2 ;;
   esac
-  while IFS= read -r marker; do
-    case "$flat" in
-      *"$marker"*) printf '%s' "$marker"; return 0 ;;
-    esac
-  done < <(fm_task_inbox_claude_dialog_markers)
-  return 1
+  marker=$(printf '%s\n' "$screen" | _fm_task_inbox_claude_dialog_match) || return 1
+  printf '%s' "$marker"
 }
 
 # The pre-typing guard behind fm_task_inbox_ring's returns 4 and 5 (see the
@@ -363,12 +518,13 @@ fm_task_inbox_claude_dialog_shown() {  # <state-dir> <task-id> <backend> <target
 # read, setting FM_TASK_INBOX_RING_NOTICE for either; 1 leaves the ring exactly
 # as it was. The task comes from the record's own inbox directory, so a record
 # outside a <task>.inbox rings as before.
-# A busy or unclassified worker is not sent Escape: a dialog is only offered
-# between turns, so the same words on a working pane are quoted text (this
-# repository's own code and docs quote them), and Escape there would cancel the
-# turn. Nothing is typed in either case, so a worker whose pane merely quotes
-# the words while idle is deferred, spends ring budget, and surfaces through the
-# ladder's ordinary escalation rather than being interrupted.
+# A busy or unclassified worker is not sent Escape: the offer is made between
+# turns, but matching screen structure does not prove the worker is idle, and
+# Escape during a working turn would cancel it. Nothing is typed in either
+# case, so a worker whose screen shows the dialog but does not read idle is
+# deferred, spends ring budget, and
+# surfaces through the ladder's ordinary escalation rather than being
+# interrupted.
 fm_task_inbox_claude_dialog_guard() {  # <backend> <target> <record-path> [expected-label]
   local backend=$1 target=$2 rec=$3 label=${4:-} dir id state marker verdict out action shown_rc=0
   dir=$(cd "${rec%/*}" 2>/dev/null && pwd) || return 1
