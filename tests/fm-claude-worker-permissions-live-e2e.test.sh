@@ -233,7 +233,7 @@ check() {
 # Both denies must match literal paths, without catching neighboring directories
 # or other files. Git's matcher differs from Claude's for escaped question marks.
 custom_settings_paths() {
-  local lab="$OUT/custom-settings" dir_name config_dir settings stream file issued verdict want n=0 calls
+  local lab="$OUT/custom-settings" dir_name config_dir settings stream file verdict want n=0 p calls
   make_lab "$lab" || fail "could not build the custom-settings lab"
   mkdir -p "$lab/wt/claudeXwork"
   for dir_name in 'claude-work' 'claude[work]' 'claude*work' 'claude?work' 'claude\work' 'claude]work[' 'claude[?]*work'; do
@@ -241,26 +241,23 @@ custom_settings_paths() {
     config_dir="$lab/wt/$dir_name"
     mkdir -p "$config_dir"
     settings=$(fm_claude_launch_settings ship no-mistakes "$FM_CPW_BRANCH" none '' "$config_dir") || fail "custom settings composition failed"
-    stream="$OUT/custom-settings-$n.jsonl"
-    claude_probe "$stream" "$lab/wt" dontAsk "$MODEL_DONTASK" "$settings" Write \
-      "This is a permission test on disposable synthetic files. Call Write once for each of these four absolute file paths in order, with content {}:
-$config_dir/settings.json
-$config_dir/settings.local.json
-$lab/wt/claudeXwork/settings.json
-$config_dir/other.json
-Use these paths literally, including punctuation and backslashes. Do not read files first. After a denial proceed to the next listed file; never retry or use another tool."
-    calls=$(stream_calls "$stream")
-    [ "$(printf '%s\n' "$calls" | wc -l | tr -d ' ')" = 4 ] || miss "[custom-settings] $dir_name: expected four Write calls, got: $calls"
+    p=0
+    # Independent turns keep a model's early stop after a denial from omitting
+    # later paths and invalidating otherwise correct permission decisions.
     for file in "$config_dir/settings.json" "$config_dir/settings.local.json" "$lab/wt/claudeXwork/settings.json" "$config_dir/other.json"; do
+      p=$((p + 1))
+      stream="$OUT/custom-settings-$n-$p.jsonl"
+      claude_probe "$stream" "$lab/wt" dontAsk "$MODEL_DONTASK" "$settings" Write \
+        "This is a permission test on a disposable synthetic file. Call Write exactly once for this absolute file path, with content {}:
+$file
+Use the path literally, including punctuation and backslashes. Do not read files first. After a denial stop; never retry or use another tool."
+      calls=$(stream_calls "$stream")
+      verdict=$(stream_field "$stream" verdict)
+      [ "$calls" = "$verdict"$'\t'"$file" ] || miss "[custom-settings] $file: expected exactly one literal Write call, got: $calls"
       case "$file" in
       "$config_dir/settings.json" | "$config_dir/settings.local.json") want=RULE_DENIED ;;
       *) want=MODE_DENIED ;;
       esac
-      verdict=
-      while IFS=$'\t' read -r verdict issued; do
-        [ "$issued" != "$file" ] || break
-        verdict=
-      done <<< "$calls"
       check custom-settings "$dir_name: ${file##*/} ($file)" "$want" "$verdict" "$calls"
       [ ! -e "$file" ] || miss "[custom-settings] a probe wrote $file"
     done
