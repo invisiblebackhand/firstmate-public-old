@@ -453,18 +453,20 @@ note "phase private: a synthetic private file's deny rules take effect through t
 # emulated at the project-local level, with no per-launch rules, which decide
 # alike. OLD is the broad legacy-prefix shape this replacement narrows.
 BASE_ONLY=$(fm_claude_launch_settings secondmate '' '' none)
-replacement_rows() { # <label> <local-allow-json> <expected for approve> <expected for fix> <expected for skip> <expected reordered>
-  local label=$1 allows=$2 want_approve=$3 want_fix=$4 want_skip=$5 want_reordered=$6 l="$OUT/respond-$1"
+replacement_rows() { # <label> <local-permissions-json> <expected for approve> <expected for fix> <expected for skip> <expected reordered> <expected repeated>
+  local label=$1 permissions=$2 want_approve=$3 want_fix=$4 want_skip=$5 want_reordered=$6 want_repeated=$7 l="$OUT/respond-$1"
   make_lab "$l" || fail "could not build the respond lab"
   mkdir -p "$l/wt/.claude"
-  printf '{"permissions":{"allow":%s}}\n' "$allows" > "$l/wt/.claude/settings.local.json"
+  printf '{"permissions":%s}\n' "$permissions" > "$l/wt/.claude/settings.local.json"
   local c want
   for pair in \
     "no-mistakes axi respond --action approve|$want_approve" \
     "no-mistakes axi respond --action approve --step review|$want_approve" \
     "no-mistakes axi respond --action fix --findings F1 --instructions tighten|$want_fix" \
     "no-mistakes axi respond --action skip --step review|$want_skip" \
-    "no-mistakes axi respond --step review --action approve|$want_reordered"; do
+    "no-mistakes axi respond --step review --action approve|$want_reordered" \
+    "no-mistakes axi respond --action approve --step review --action skip|$want_repeated" \
+    "no-mistakes axi respond --action approve --step review --action=fix|$want_repeated"; do
     c=${pair%|*}
     want=${pair#*|}
     IFS=$'\t' read -r verdict _ _ _ detail < <(FM_LIVE_STUB_LOG="$l/stub.log" \
@@ -472,8 +474,8 @@ replacement_rows() { # <label> <local-allow-json> <expected for approve> <expect
     check respond "$label: $c" "$want" "$verdict" "$detail"
   done
 }
-replacement_rows old '["Bash(no-mistakes axi respond:*)"]' RAN RAN RAN RAN
-replacement_rows replacement '["Bash(no-mistakes axi respond --action approve)","Bash(no-mistakes axi respond --action approve --step *)"]' RAN MODE_DENIED MODE_DENIED MODE_DENIED
+replacement_rows old '{"allow":["Bash(no-mistakes axi respond:*)"]}' RAN RAN RAN RAN RAN
+replacement_rows replacement '{"allow":["Bash(no-mistakes axi respond --action approve)","Bash(no-mistakes axi respond --action approve --step *)"],"deny":["Bash(no-mistakes*--action*--action*)"]}' RAN MODE_DENIED MODE_DENIED MODE_DENIED RULE_DENIED
 note "phase respond: the old rule allows every action, the replacement allows approve and nothing else"
 
 # --- report --------------------------------------------------------------------

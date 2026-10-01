@@ -1295,7 +1295,9 @@ What the run shows:
 - A synthetic private file built through the real builder took effect over `Read`, `Write`, and `Bash` rules: each denied path or marker was `RULE_DENIED` and its control was refused only by the mode, and the tracked `//**/.claude/settings.local.json` edit rule denied a write to the project's local settings file.
 - The user-scope approval rule: with the broad legacy-prefix rule `Bash(no-mistakes axi respond:*)`, all five respond forms ran, and with the two exact rules `Bash(no-mistakes axi respond --action approve)` and `Bash(no-mistakes axi respond --action approve --step *)`, only the two approve forms ran.
   The guard emulated those rules at the project-local level, because it never loads or edits the operator's own user settings; the rule syntax is the same at every level, but user scope itself was not run.
-  The second exact rule ends in a wildcard step name, so it shares the repeated-`--action` gap recorded below.
+  That historical case installed only the allows and omitted the required repeated-action deny; it does not validate the complete replacement.
+  The current [owner-settings handoff](../configuration.md#owner-settings-handoff) requires both approve allows together with `Bash(no-mistakes*--action*--action*)`, and the live replacement case now installs that pair and checks repeated space and equals actions.
+  Those updated replacement cases have not been run against Claude Code yet.
 
 Limits:
 
@@ -1314,7 +1316,7 @@ When it fails, read the mismatches it prints against the release, update `bin/fm
 ### Repeated --action rows added after the recorded run
 
 The step-scoped approve allow `Bash(no-mistakes axi respond --action approve --step *)` ends in a wildcard, and `no-mistakes` keeps the last `--action` it is given, so `--action approve --step review --action skip` matched the allow and would have skipped the gate with no classifier review.
-The tracked deny `Bash(no-mistakes*--action*--action*)` closes that for every task worker, and the table gained eight rows for it: five repeated forms and a quoted `--instructions` value in the no-mistakes scope, and one repeated form each in the direct-PR and scout scopes, all expecting `RULE_DENIED`.
+The tracked deny `Bash(no-mistakes*--action*--action*)` closes that for every task worker; the owner-settings replacement must pair the two approve allows with that same deny, and the table gained eight rows for it: five repeated forms and a quoted `--instructions` value in the no-mistakes scope, and one repeated form each in the direct-PR and scout scopes, all expecting `RULE_DENIED`.
 The single approve rows at the top of the table stay the controls and still expect `RAN`.
 The recorded run's `# phase table: 106 rows` and every result above predate these rows, so they run on the next guard run, which replaces the output above and removes this note.
 Until then only the portable suite has applied them, through the simulated matcher, which denies all eight (104 rows, 68 denied) and, run against the previous rules file, allowed the skip form.

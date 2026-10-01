@@ -21,17 +21,20 @@
 #      repository the update is refused rather than guessed at, because there
 #      is nothing to compare against. A ref the remote does not have yet has
 #      nothing to compare and passes this step;
-#   5. gitleaks scans exactly the commits the push adds: those reachable from
-#      the pushed commit but not from the remote's current commit and not from
-#      any remote-tracking branch of this remote (of every remote when this one
-#      has none), so history the remote already holds is never re-scanned. The
-#      ref is refused on a finding, on a gitleaks failure, and, for every ref
+#   5. gitleaks scans commits reachable from the pushed commit but not from
+#      the destination ref's advertised remote SHA; a new ref scans everything
+#      reachable from the pushed commit. The ref is refused on a finding,
+#      on a gitleaks failure, and, for every ref
 #      that reaches this step, when gitleaks is not on PATH.
 # Every refused ref is named with its reason on stderr and the guard then exits
 # 1, which makes git abort the push; a push with no refused ref exits 0. A
 # gitleaks finding exits it with a code of its own so a finding and a broken scan
 # read differently; the scan needs gitleaks 8.19 or newer for the `git`
 # subcommand and honors the repository's own gitleaks configuration.
+#
+# Default-branch protection is limited to main, master, and the remote's
+# recorded HEAD when known; an unknown or stale recorded HEAD can leave other
+# default-branch names unprotected.
 #
 # What never reaches this guard: a push made with --no-verify, because git then
 # runs no hook at all. no-mistakes pushes its own gate-trigger pushes that way, so a
@@ -152,13 +155,8 @@ EOF
 scan_ref() {
   local remote_ref=$1 local_sha=$2 remote_sha=$3 repo count rc
   local -a revs
-  revs=("$local_sha" --not)
-  is_zero_sha "$remote_sha" || revs+=("$remote_sha")
-  if git for-each-ref --count=1 "refs/remotes/$REMOTE/" 2>/dev/null </dev/null | grep -q .; then
-    revs+=("--remotes=$REMOTE")
-  else
-    revs+=(--remotes)
-  fi
+  revs=("$local_sha")
+  is_zero_sha "$remote_sha" || revs+=(--not "$remote_sha")
   if ! count=$(git rev-list --count "${revs[@]}" 2>/dev/null </dev/null); then
     refuse "$remote_ref" "git could not list the commits being pushed, so they cannot be scanned for secrets"
     return

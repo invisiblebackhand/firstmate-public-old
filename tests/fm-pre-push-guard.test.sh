@@ -110,7 +110,7 @@ scanned() { # commit subjects the stand-in was asked to scan, one per line
   grep '^scanned:' "$GLOG" | sed 's/^scanned://' || true
 }
 
-test_new_branch_push_passes_and_scans_only_the_new_commits() {
+test_new_branch_push_passes_and_scans_all_reachable_commits() {
   make_world new-branch
   git -C "$WORK" checkout -q -b fm/task
   commit_file "$WORK" 'task one'
@@ -118,10 +118,10 @@ test_new_branch_push_passes_and_scans_only_the_new_commits() {
   gpush -q -u origin fm/task
   expect_code 0 "$RC" "a direct-PR worker's first push of its own branch must pass the guard"$'\n'"$OUT"
   remote_has refs/heads/fm/task || fail "the pushed branch did not reach the remote"
-  assert_equals $'task two\ntask one' "$(scanned)" "gitleaks must scan exactly the new commits and not the history the remote holds"
+  assert_equals $'task two\ntask one\ninitial' "$(scanned)" "a new destination ref must scan all reachable commits"
   assert_contains "$(grep '^argv:' "$GLOG")" '[git]' "the scan must use gitleaks' git subcommand"
   assert_contains "$(grep '^argv:' "$GLOG")" '[--redact]' "findings must be redacted so a secret is never echoed into a pane"
-  pass "a new branch push passes and gitleaks scans exactly its new commits"
+  pass "a new branch push passes and gitleaks scans all reachable commits"
 }
 
 test_fast_forward_push_scans_only_the_added_commit() {
@@ -138,7 +138,7 @@ test_fast_forward_push_scans_only_the_added_commit() {
   pass "a fast-forward update passes and gitleaks scans only the added commit"
 }
 
-test_merging_published_history_scans_only_the_unpublished_commits() {
+test_merging_published_history_scans_commits_added_to_the_destination() {
   make_world merge-main
   git -C "$WORK" checkout -q -b fm/task
   commit_file "$WORK" 'task one'
@@ -154,13 +154,13 @@ test_merging_published_history_scans_only_the_unpublished_commits() {
   : >"$GLOG"
   gpush -q origin fm/task
   expect_code 0 "$RC" "pushing a branch that merged published history must pass"$'\n'"$OUT"
-  assert_not_contains "$(scanned)" 'main moved on' "history the remote already holds must not be scanned again"
+  assert_contains "$(scanned)" 'main moved on' "history newly reachable from the destination ref must be scanned"
   assert_contains "$(scanned)" 'task two' "the worker's own new commit must be scanned"
   assert_contains "$(scanned)" 'merge main into task' "the merge commit being pushed must be scanned"
-  pass "published history merged into a branch is not scanned again"
+  pass "merged history newly reachable from the destination ref is scanned"
 }
 
-test_a_first_push_to_a_remote_with_no_tracking_branches_does_not_rescan_other_remotes() {
+test_a_first_push_to_a_remote_with_no_tracking_branches_scans_all_history() {
   make_world fresh-remote
   git init -q --bare "$W/fresh.git"
   git -C "$WORK" remote add fresh "$W/fresh.git"
@@ -168,8 +168,27 @@ test_a_first_push_to_a_remote_with_no_tracking_branches_does_not_rescan_other_re
   commit_file "$WORK" 'task one'
   gpush -q fresh HEAD:refs/heads/fm/task
   expect_code 0 "$RC" "a first push to a remote this clone has never fetched must pass"$'\n'"$OUT"
-  assert_equals 'task one' "$(scanned)" "history other remotes already hold must not be scanned again"
-  pass "a remote with no tracking branches falls back to the history every remote already holds"
+  assert_equals $'task one\ninitial' "$(scanned)" "history held by other remotes must be scanned for a new destination ref"
+  pass "a remote with no tracking branches scans every reachable commit"
+}
+
+test_a_commit_fetched_from_another_remote_is_scanned_and_refused() {
+  make_world fetched-private
+  git clone -q "$ORIGIN" "$W/private-work"
+  commit_file "$W/private-work" 'private secret'
+  git clone -q --bare "$W/private-work" "$W/private.git"
+  git -C "$WORK" remote add private "$W/private.git"
+  git -C "$WORK" fetch -q private
+  git init -q --bare "$W/fresh.git"
+  git -C "$WORK" remote add fresh "$W/fresh.git"
+  GITLEAKS_EXIT=42
+  gpush fresh refs/remotes/private/main:refs/heads/fm/task
+  unset GITLEAKS_EXIT
+  [ "$RC" -ne 0 ] || fail "a fetched secret-bearing commit must be refused"$'\n'"$OUT"
+  assert_equals $'private secret\ninitial' "$(scanned)" "a private remote must not exclude commits from a fresh destination scan"
+  assert_contains "$OUT" 'gitleaks found a secret' "the scan finding must refuse the push"
+  [ -z "$(git -C "$W/fresh.git" for-each-ref refs/heads/fm/task)" ] || fail "the refused commit reached the destination"
+  pass "commits fetched from another remote are scanned and findings refuse disclosure"
 }
 
 test_a_repository_with_nothing_published_scans_everything_it_pushes() {
@@ -413,10 +432,11 @@ test_usage() {
   pass "the guard prints usage for --help and refuses to run without git's arguments"
 }
 
-test_new_branch_push_passes_and_scans_only_the_new_commits
+test_new_branch_push_passes_and_scans_all_reachable_commits
 test_fast_forward_push_scans_only_the_added_commit
-test_merging_published_history_scans_only_the_unpublished_commits
-test_a_first_push_to_a_remote_with_no_tracking_branches_does_not_rescan_other_remotes
+test_merging_published_history_scans_commits_added_to_the_destination
+test_a_first_push_to_a_remote_with_no_tracking_branches_scans_all_history
+test_a_commit_fetched_from_another_remote_is_scanned_and_refused
 test_a_repository_with_nothing_published_scans_everything_it_pushes
 test_delete_is_refused
 test_default_branch_pushes_are_refused

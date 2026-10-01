@@ -839,19 +839,22 @@ They apply under either [permission mode](#claude-permission-mode-configclaude-p
 
 | Worker | Allowed | Denied |
 | --- | --- | --- |
-| Ship, `no-mistakes` | `git commit`, `git rebase` onto the default branch, `git rebase --continue` and `--abort`, and `no-mistakes axi respond --action approve` | the shared deny set |
+| Ship, `no-mistakes` | `git commit`, `git rebase` onto `main`, `master`, `origin/main`, or `origin/master`, `git rebase --continue` and `--abort`, and `no-mistakes axi respond --action approve` | the shared deny set |
 | Ship, `direct-PR` | the commit and rebase allows, and a push of the task's own named branch | the shared deny set |
 | Ship, `local-only` | the commit and rebase allows | the shared deny set and every push |
 | Ship on a Gerrit forge | the commit and rebase allows, and the gate approval in `no-mistakes` mode | the shared deny set and every push |
 | Scout | nothing | the shared deny set and every push |
 
-The shared deny set blocks force, `+refspec`, delete, mirror, all, tags, prune, and no-verify pushes, any push to the default branch, a bare push or a push of `HEAD`, merges through git, gh, and gh-axi, `reset --hard`, `clean`, `branch -D` and `--force`, rebase `--exec` and `-x` or onto a local default branch, `commit --no-verify` and `--amend`, `--yes` on no-mistakes, a repeated `--action` on any no-mistakes command, and edits to Claude's user and local settings files.
+The shared deny set blocks force, `+refspec`, delete, mirror, all, tags, prune, and no-verify pushes, any push to `main` or `master`, a bare push or a push of `HEAD`, merges through git, gh, and gh-axi, `reset --hard`, `clean`, `branch -D` and `--force`, rebase `--exec` and `-x` or rewriting local `main` or `master` itself (`git rebase <upstream> main` or `git rebase <upstream> master`), `commit --no-verify` and `--amend`, `--yes` on no-mistakes, a repeated `--action` on any no-mistakes command, and edits to Claude's user and local settings files.
 An allowed command skips Claude's auto-mode classifier, and the classifier allows a push to the default branch by default, so the deny set is what keeps a worker off the default branch.
+Rebasing the task branch onto `main`, `master`, `origin/main`, or `origin/master` remains allowed.
 The step-scoped gate approval allow ends in a wildcard and `no-mistakes` keeps the last `--action` it is given, so the repeated-`--action` deny is what stops `--action approve --step review --action skip` from riding that allow and skipping the gate with no classifier review.
 A ship record with no recorded delivery mode takes `no-mistakes`, the default `bin/fm-teardown.sh` applies to the same record, and any other unknown mode refuses the launch.
 
 ### Limits
 
+Worker rules name only `main` and `master`; other default-branch names are an accepted limit left to the classifier.
+The bundled pre-push guard refuses `main`, `master`, and the remote's recorded HEAD when known, so an unknown or stale recorded HEAD can leave another default-branch name unprotected.
 A Bash rule matches command text, so it is not a security boundary.
 A form the rules do not match is decided as it would be without them, by the permission mode or the classifier, and is never allowed by them.
 Allows are exact commands, so they cannot widen to other arguments, and the own-branch push allows are built only when the branch name uses letters, digits, `.`, `_`, `-`, and `/`; any other branch loses them with a notice and leaves its pushes to the classifier.
@@ -861,6 +864,26 @@ Rules combine across settings levels and a deny rule beats an allow rule from an
 The shared denies have no per-task override, so a task that needs a merge, `reset --hard`, `clean`, `branch -D`, or a rebase followed by a force push needs a person to run it.
 The rules are built at launch, so a promoted scout keeps its scout rules, including the ban on pushing, until it is relaunched, which a direct-PR promotion needs before its worker can push.
 The dated verification record, with what the shapes do not catch, is [Claude worker permission rules](verification/runtime-backends.md#claude-worker-permission-rules), and `tests/fm-claude-worker-permissions-live-e2e.test.sh` refreshes it.
+
+### Owner-settings handoff
+
+Firstmate never edits `~/.claude/settings.json`; the owner applies this replacement.
+Remove `Bash(no-mistakes axi respond:*)` from `permissions.allow`, retain unrelated entries, and add the following entries as a required pair: both approve allows and the repeated-action deny.
+The deny must accompany the allows in owner and supervisor sessions too, because the step wildcard can otherwise authorize a later non-approve action.
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(no-mistakes axi respond --action approve)",
+      "Bash(no-mistakes axi respond --action approve --step *)"
+    ],
+    "deny": ["Bash(no-mistakes*--action*--action*)"]
+  }
+}
+```
+
+The [verification record](verification/runtime-backends.md#repeated---action-rows-added-after-the-recorded-run) distinguishes recorded results from the updated live replacement case awaiting a rerun.
 
 ### Private perimeter
 

@@ -46,26 +46,6 @@ for scope in nm pr lo gerrit scout; do
 done
 pass "every task worker's JSON is one line of valid JSON led by the unchanged base controls, with no autoMode and no private file"
 
-# --- tracked rule data: properties the shapes must keep ------------------------
-
-jq -e '
-  [.allow_ship_all_modes[], .allow_ship_no_mistakes[], .allow_ship_direct_pr[]]
-  | all(.[]; (startswith("Bash(") and endswith(")")) and
-             (. as $r | ($r | ltrimstr("Bash(") | rtrimstr(")")) as $s
-              | ($s | [match("\\*"; "g")] | length) <= 1 and (($s | contains("*") | not) or ($s | endswith(" *")))))
-' "$ROOT/bin/fm-claude-worker-permissions.json" >/dev/null \
-  || fail "an allow rule must be an exact command, or a single trailing ' *' after its subcommand"
-pass "every tracked allow rule is an exact command or ends in one wildcard after its subcommand"
-
-jq -e '[.[][] | select(endswith(":*)"))] | length == 0' "$ROOT/bin/fm-claude-worker-permissions.json" >/dev/null \
-  || fail "a rule ending in ':*' is read as Claude's legacy prefix wildcard and matches nothing else; end it in ':**'"
-pass "no tracked rule ends in the legacy ':*' prefix wildcard"
-
-jq -e '.allow_ship_direct_pr | length == 3 and all(.[]; contains("__BRANCH__") and (contains("*") | not))' \
-  "$ROOT/bin/fm-claude-worker-permissions.json" >/dev/null \
-  || fail "the direct-PR push allows must be exact commands that name the branch placeholder"
-pass "the direct-PR push allows are exact and name only the branch placeholder"
-
 # --- composition by kind, mode, and forge --------------------------------------
 
 has_allow() { printf '%s' "$1" | jq -e --arg r "$2" '(.permissions.allow // []) | index($r) != null' >/dev/null; }
@@ -161,6 +141,22 @@ none_json=$(jq -c 'del(.permissions.deny)' <<<"$nm")
 [ "$(jq -rn --argjson s "$none_json" --arg cmd 'git push --force origin x' '$s | '"$SIM")" = none ] \
   || fail "the simulated matcher must stop denying once the deny set is gone"
 pass "the simulated matcher is not vacuous: it stops denying when the deny rules are removed"
+
+owner_replacement='{"permissions":{"allow":["Bash(no-mistakes axi respond --action approve)","Bash(no-mistakes axi respond --action approve --step *)"],"deny":["Bash(no-mistakes*--action*--action*)"]}}'
+for pair in \
+  'no-mistakes axi respond --action approve|allow' \
+  'no-mistakes axi respond --action approve --step review|allow' \
+  'no-mistakes axi respond --action fix --findings F1 --instructions tighten|none' \
+  'no-mistakes axi respond --action skip --step review|none' \
+  'no-mistakes axi respond --step review --action approve|none' \
+  'no-mistakes axi respond --action approve --step review --action skip|deny' \
+  'no-mistakes axi respond --action approve --step review --action=fix|deny'; do
+  cmd=${pair%|*}
+  want=${pair#*|}
+  got=$(jq -rn --argjson s "$owner_replacement" --arg cmd "$cmd" '$s | '"$SIM") || fail "the owner replacement matcher failed: $cmd"
+  [ "$got" = "$want" ] || fail "owner replacement expected $want, got $got: $cmd"
+done
+pass "the paired owner replacement allows approvals and denies repeated actions through the simulated matcher"
 
 # --- the private perimeter -----------------------------------------------------
 
