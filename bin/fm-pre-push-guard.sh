@@ -23,7 +23,9 @@
 #      nothing to compare and passes this step;
 #   5. gitleaks scans commits reachable from the pushed commit but not from
 #      the destination ref's advertised remote SHA; a new ref scans everything
-#      reachable from the pushed commit. The ref is refused on a finding,
+#      reachable from the pushed commit. Separate diffs against each merge
+#      parent include changes introduced by the merge itself, while traversal
+#      retains side-branch history. The ref is refused on a finding,
 #      on a gitleaks failure, and, for every ref
 #      that reaches this step, when gitleaks is not on PATH.
 # Every refused ref is named with its reason on stderr and the guard then exits
@@ -40,8 +42,9 @@
 # runs no hook at all. no-mistakes pushes its own gate-trigger pushes that way, so a
 # worker's pipeline start is unaffected (docs/verification/runtime-backends.md
 # "Pre-push guard and no-mistakes pushes" records the evidence), and the
-# pipeline's delivery pushes run inside the no-mistakes daemon, outside every
-# fleet pane. Private path, file-type, and size rules are deliberately not here:
+# service-managed daemon's delivery pushes do not inherit pane hooks; the
+# verification record also covers the detached fallback's inheritance limit.
+# Private path, file-type, and size rules are deliberately not here:
 # a private guard that wants them calls this one first with the same arguments
 # and standard input, then adds its own checks.
 set -u

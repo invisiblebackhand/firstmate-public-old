@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# The per-launch --settings JSON of every Claude launch bin/fm-spawn.sh makes
+# The per-launch --settings JSON of the canonical Claude template in bin/fm-spawn.sh
 # (ship, scout, secondmate, and relaunch), built in one place.
 #
 # Usage: . bin/fm-claude-worker-permissions-lib.sh
@@ -10,7 +10,7 @@
 #   fm_claude_worker_private_check <private-file>
 #       Validates config/claude-worker-permissions.json alone.
 #
-# CONTRACT. Every launch carries the base controls: the feedbackDrafts switch,
+# CONTRACT. Every JSON built here carries the base controls: the feedbackDrafts switch,
 # the attribution-off policy, and the /auto-mode-setup off switch (the comment in
 # bin/fm-spawn.sh's launch_template() owns why each rides the launch). A
 # secondmate's JSON is exactly those controls and nothing else, byte for byte.
@@ -27,9 +27,10 @@
 #   ship on a Gerrit forge       all_modes (+ no_mistakes)      all_task_workers + no_push
 #   scout                        none                           all_task_workers + no_push
 #
-# The table's names are the arrays of that file without their prefix. An allow
-# rule is an exact command, so it cannot widen to other arguments: direct_pr
-# names this task's own branch, substituted only when the branch is plain
+# The table's names are the arrays of that file without their prefix. Rebase
+# and push allows are exact; commit and step-scoped approval accept arguments
+# subject to the denies (docs/configuration.md "Claude worker permissions").
+# direct_pr names this task's own branch, substituted only when the branch is plain
 # (letters, digits, . _ - /); any other branch drops those allows with a notice
 # and leaves the push to Claude's own classifier. A ship record with no
 # recorded delivery mode takes no-mistakes, the default bin/fm-teardown.sh

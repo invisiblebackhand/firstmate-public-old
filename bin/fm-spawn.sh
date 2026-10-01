@@ -325,15 +325,15 @@
 #   restart, and it is inherited into secondmate homes (bin/fm-config-inherit-lib.sh).
 # Claude worker permissions (bin/fm-claude-worker-permissions.json,
 #   config/claude-worker-permissions.json):
-#   Every claude launch's --settings JSON is built by
+#   The canonical claude template's --settings JSON is built by
 #   bin/fm-claude-worker-permissions-lib.sh, whose header owns the contract: a
 #   ship or scout worker carries permission rules chosen by its kind, delivery
 #   mode, forge, and branch, and a secondmate's launch is unchanged. The
 #   optional local file adds one home's private deny rules and classifier prose.
-#   It is validated before any endpoint, worktree, or record exists, on every
-#   ship or scout claude launch including a relaunch, and a malformed file
-#   refuses the spawn. It is inherited into secondmate homes, and the rules a
-#   worker launched with are fixed until it is relaunched, so a scout promoted
+#   It is validated before any endpoint, worktree, or record is created, on every
+#   task-worker launch covered by that template including a relaunch, and a
+#   malformed file refuses the spawn. It is inherited into secondmate homes,
+#   and the rules a worker launched with are fixed until it is relaunched, so a scout promoted
 #   to a ship keeps the scout's rules until bin/fm-control.sh relaunches it.
 # Worker account pin (config/claude-account, config/pi-account):
 #   Opt-in. With no file, a Claude or Pi launch is unchanged: Claude still
@@ -3149,7 +3149,7 @@ if [ "$KIND" = ship ]; then
 fi
 
 # Per-launch Claude --settings (bin/fm-claude-worker-permissions-lib.sh): built
-# here, before any endpoint, worktree, or record exists, so a malformed
+# here, before any endpoint, worktree, or record is created, so a malformed
 # config/claude-worker-permissions.json refuses a task worker's launch instead
 # of starting it without the perimeter the file declares. Only the canonical
 # Claude launch template receives these rules and the private-file check; a raw

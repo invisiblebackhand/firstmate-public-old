@@ -847,7 +847,7 @@ They apply under either [permission mode](#claude-permission-mode-configclaude-p
 | Ship on a Gerrit forge | the commit and rebase allows, and the gate approval in `no-mistakes` mode | the shared deny set and every push |
 | Scout | nothing | the shared deny set and every push |
 
-The shared deny set blocks force, `+refspec`, delete, mirror, all, tags, prune, and no-verify pushes, any push to `main` or `master`, a bare push or a push of `HEAD`, merges through git, gh, and gh-axi, `reset --hard`, `clean`, `branch -D` and `--force`, rebase `--exec` and `-x` or rewriting local `main` or `master` itself (`git rebase <upstream> main` or `git rebase <upstream> master`), `commit --no-verify` and `--amend`, `--yes` on no-mistakes, a repeated `--action` on any no-mistakes command, and edits to Claude's user and local settings files.
+The shared deny set blocks force, `+refspec`, delete, mirror, all, tags, prune, and no-verify pushes, any push to `main` or `master`, a bare push or a push of `HEAD`, merges through git, gh, and gh-axi, `reset --hard`, `clean`, `branch -D` and `--force`, rebase `--exec` and `-x` or rewriting local `main` or `master` itself (`git rebase <upstream> main` or `git rebase <upstream> master`), `commit --no-verify`, `-n`, and `--amend`, `--yes` and `-y` on no-mistakes, a repeated `--action` on any no-mistakes command, and edits to Claude's user and local settings files.
 An allowed command skips Claude's auto-mode classifier, and the classifier allows a push to the default branch by default, so the deny set is what keeps a worker off the default branch.
 Rebasing the task branch onto `main`, `master`, `origin/main`, or `origin/master` remains allowed.
 The step-scoped gate approval allow ends in a wildcard and `no-mistakes` keeps the last `--action` it is given, so the repeated-`--action` deny is what stops `--action approve --step review --action skip` from riding that allow and skipping the gate with no classifier review.
@@ -859,7 +859,8 @@ Worker rules name only `main` and `master`; other default-branch names are an ac
 The bundled pre-push guard refuses `main`, `master`, and the remote's recorded HEAD when known, so an unknown or stale recorded HEAD can leave another default-branch name unprotected.
 A Bash rule matches command text, so it is not a security boundary.
 A form the rules do not match is decided as it would be without them, by the permission mode or the classifier, and is never allowed by them.
-Allows are exact commands, so they cannot widen to other arguments, and the own-branch push allows are built only when the branch name uses letters, digits, `.`, `_`, `-`, and `/`; any other branch loses them with a notice and leaves its pushes to the classifier.
+Rebase and own-branch push allows are exact commands; the commit allow accepts arguments, and the step-scoped gate approval allow accepts text after `--step`, subject to the shared denies.
+The own-branch push allows are built only when the branch name uses letters, digits, `.`, `_`, `-`, and `/`; any other branch loses them with a notice and leaves its pushes to the classifier.
 Deny shapes are anchored to the subcommand, so a commit message that mentions a force push is untouched, but a commit command that carries `--no-verify`, ` -n`, or `--amend` anywhere in its text is denied, including inside an inline `-m` message: write such a message with `-F` or a heredoc, whose body Claude does not match.
 The repeated-`--action` deny counts every `--action` in the command text, so an `--instructions` value that itself mentions `--action` is denied.
 Rules combine across settings levels and a deny rule beats an allow rule from another level, but a broader allow at the user or project level still allows whatever the per-launch denies do not match, so keep user-level allows for commands such as `no-mistakes axi respond` as narrow as the per-launch ones.
@@ -889,14 +890,15 @@ The [verification record](verification/runtime-backends.md#repeated---action-row
 
 ### Private perimeter
 
-The optional local, gitignored `config/claude-worker-permissions.json` adds a home's own deny rules to every Claude task worker's launch, for rules that name this machine's paths, tools, or services and so cannot be tracked.
+The optional local, gitignored `config/claude-worker-permissions.json` adds a home's own deny rules to the task-worker launches covered above, for rules that name this machine's paths, tools, or services and so cannot be tracked.
 It is deny-only by construction and accepts exactly two keys:
 
 - `permissions.deny` is a list of Claude permission rules, appended after the tracked denies.
 - `autoMode.hard_deny` is a list of plain-language rules for Claude's auto-mode classifier, emitted after the built-in `"$defaults"` entry so the built-in rules stay in force; the literal `"$defaults"` is refused in the file.
 
 Any other key, including every `allow`, `ask`, `soft_deny`, and `environment` form, refuses the launch, so the file can narrow a worker and never widen it.
-A file that is unreadable, is not valid JSON, holds an object or list of the wrong type, including `false` or `null`, or holds a malformed or non-string rule refuses the spawn or relaunch before any endpoint, worktree, or task record exists, and the diagnostic names the file and the problem.
+A file that is unreadable, is not valid JSON, holds an object or list of the wrong type, including `false` or `null`, or holds a malformed or non-string rule refuses a spawn before any endpoint, worktree, or task record is created, and the diagnostic names the file and the problem.
+`bin/fm-control.sh relaunch` also validates the file in its preflight before stopping the current worker, including when switching another harness to Claude; the spawn validates it again before starting the replacement.
 Claude skips an invalid rule silently, so accepting one would start a worker without the perimeter the file declares.
 The spawn's check is a conservative syntax check of its own, not Claude's parser, so to see Claude's verdict copy the file's `permissions` into a scratch directory's `.claude/settings.local.json` and run `claude doctor` there, which lists every rule it skips.
 `bin/fm-spawn.sh` reads the file on every spawn and relaunch, so a change applies at the next launch.
@@ -980,7 +982,8 @@ Firstmate does not install `gitleaks`, so install it through the machine's own c
 Private path, file-type, and size rules are not part of firstmate: a private guard that wants them runs the bundled guard first with the same arguments and standard input, then adds its own checks.
 
 A push made with `--no-verify` runs no hook, so it never reaches the guard.
-no-mistakes starts its pipeline that way, which keeps a worker's own pipeline start working with the guard configured, and the pipeline's delivery pushes run inside its daemon rather than a fleet pane; [runtime backend verification](verification/runtime-backends.md#pre-push-guard-and-no-mistakes-pushes) records that evidence.
+no-mistakes starts its pipeline that way, which keeps a worker's own pipeline start working with the guard configured.
+Delivery pushes from a service-managed daemon do not inherit the pane's hooks; a detached fallback daemon started from a fleet pane can inherit them and have delivery pushes refused, as the [runtime backend verification](verification/runtime-backends.md#pre-push-guard-and-no-mistakes-pushes) records.
 Because the configured path is absolute and differs per checkout, `config/pre-push-guard` is local to each home and is not inherited into secondmate homes.
 
 ## Home brief include (config/brief-include.md)

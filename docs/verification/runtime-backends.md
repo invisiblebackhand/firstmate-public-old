@@ -1101,7 +1101,7 @@ Limits:
 
 ## Claude worker permission rules
 
-`bin/fm-claude-worker-permissions-lib.sh` builds the permission rules every Claude task worker launches with, from the tracked rules in `bin/fm-claude-worker-permissions.json` and an optional private deny file, and [`docs/configuration.md`](../configuration.md#claude-worker-permissions-configclaude-worker-permissionsjson) owns the contract.
+[`docs/configuration.md`](../configuration.md#claude-worker-permissions-configclaude-worker-permissionsjson) owns the Claude worker permission contract and launch scope; this record verifies the builder and tracked rules.
 Claude Code matches a Bash rule against command text, so what a rule catches, and what it leaves to the permission mode or the auto-mode classifier, is vendor behavior; this section records it.
 
 This evidence was gathered on 2026-10-01 against Claude Code 2.1.286 on macOS arm64.
@@ -1305,7 +1305,7 @@ What the run shows:
   Run by hand on the same date, `claude doctor` also listed an MCP rule with parentheses, `mcp__srv__tool(x)`, as invalid and accepted hyphenated server names such as `mcp__example-server__*`.
   It does not validate `autoMode` key names, so a misspelled `hard_deny` passes, which is why the hard-deny effect is checked by behavior above.
 - A synthetic private file built through the real builder took effect over `Read`, `Write`, and `Bash` rules: each denied path or marker was `RULE_DENIED` and its control was refused only by the mode, and the tracked `//**/.claude/settings.local.json` edit rule denied a write to the project's local settings file.
-- The user-scope approval rule: with the broad legacy-prefix rule `Bash(no-mistakes axi respond:*)`, all five respond forms ran, and with the two exact rules `Bash(no-mistakes axi respond --action approve)` and `Bash(no-mistakes axi respond --action approve --step *)`, only the two approve forms ran.
+- The user-scope approval rule: with the broad legacy-prefix rule `Bash(no-mistakes axi respond:*)`, all five respond forms ran, and with the two approval rules `Bash(no-mistakes axi respond --action approve)` and `Bash(no-mistakes axi respond --action approve --step *)`, only the two approve forms ran.
   The guard emulated those rules at the project-local level, because it never loads or edits the operator's own user settings; the rule syntax is the same at every level, but user scope itself was not run.
   That historical case installed only the allows and omitted the required repeated-action deny; it does not validate the complete replacement.
   The current [owner-settings handoff](../configuration.md#owner-settings-handoff) requires both approve allows together with `Bash(no-mistakes*--action*--action*)`, and the live replacement case now installs that pair and checks repeated space and equals actions.
