@@ -898,9 +898,15 @@ A non-zero exit from the guard refuses the push, and a configured path that is m
 Failure to read the guard config or capture git's ref input also refuses the push.
 When the file is absent, empty, or contains only whitespace, the wrapper behaves exactly as it did before this hook point existed.
 
-This is a public-template hook point, not a bundled guard.
-The actual guard script, which might run `gitleaks` and enforce path, file-type, or size rules, lives in the owner's private dotfiles or tooling and is not part of firstmate.
-Because the guard path is usually machine-specific, `config/pre-push-guard` is local to each home and is not inherited into secondmate homes.
+Firstmate bundles one generic guard, `bin/fm-pre-push-guard.sh`, and a home opts in by putting that script's absolute path on the first line of its `config/pre-push-guard`.
+The script's header owns the contract.
+In short, it refuses a branch delete, a push to the remote's default branch, and a non-fast-forward update, and it refuses any push whose new commits fail a `gitleaks` scan, including when `gitleaks` is not on `PATH`.
+Firstmate does not install `gitleaks`, so install it through the machine's own configuration before opting in, because a configured guard refuses every push it cannot scan.
+Private path, file-type, and size rules are not part of firstmate: a private guard that wants them runs the bundled guard first with the same arguments and standard input, then adds its own checks.
+
+A push made with `--no-verify` runs no hook, so it never reaches the guard.
+no-mistakes starts its pipeline that way, which keeps a worker's own pipeline start working with the guard configured, and the pipeline's delivery pushes run inside its daemon rather than a fleet pane; [runtime backend verification](verification/runtime-backends.md#pre-push-guard-and-no-mistakes-pushes) records that evidence.
+Because the configured path is absolute and differs per checkout, `config/pre-push-guard` is local to each home and is not inherited into secondmate homes.
 
 ## Home brief include (config/brief-include.md)
 

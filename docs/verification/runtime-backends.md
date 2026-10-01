@@ -1041,6 +1041,64 @@ The portable regressions drive a failing capture and an empty one through the tm
 Refresh this section after any Claude Code upgrade by running the guard above.
 When it fails, read the release's strings and components again without opening the dialog, update the contract and matcher at `fm_task_inbox_claude_dialog_markers`, the screens in `tests/fixtures.sh`, and this record with the new version and result.
 
+## Pre-push guard and no-mistakes pushes
+
+`bin/fm-pre-push-guard.sh` runs from the pre-push hook the fleet wrapper installs, so it judges only the pushes that run that hook.
+A guard that refused no-mistakes' own pushes would break validation, so this section records which of them reach it.
+The wrapper installs the hook through `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_0`, and `GIT_CONFIG_VALUE_0` set only in a fleet pane's environment, as `bin/fm-git-strip-ai-trailers.sh` documents.
+
+This evidence was gathered on 2026-10-01 against no-mistakes v1.84.0 on macOS arm64, from the v1.84.0 source and the installed binary.
+No pipeline was run, because a real run starts an agent and pushes to a real remote.
+The half that belongs to this repository runs in `tests/fm-pre-push-guard.test.sh` with real git and a local bare remote: a `--no-verify` push to a gate-style remote never reaches the guard, and the same push with hooks enabled is refused.
+
+What a worker's own pane pushes:
+
+- The CLI's pushes that start a run or trigger a gate are made with `git push --no-verify`, so git runs no hook for them.
+  In the v1.84.0 source, `internal/git/git.go` adds `--no-verify` in `PushCommitWithOptionsSkippingHooks` and `PushWithOptionsSkippingHooks`, and the only CLI push sites, in `internal/cli/axi_drive.go` and `internal/cli/wizard.go`, call those two helpers.
+  The helpers' own comment reads "Use it only for a local no-mistakes gate trigger; delivery pushes keep the repository hook."
+- The installed binary carries both helper names:
+
+```sh
+no-mistakes --version
+strings -a "$(command -v no-mistakes)" | grep -o -e 'PushCommitWithOptionsSkippingHooks' -e 'PushWithOptionsSkippingHooks' | sort | uniq -c
+```
+
+```text
+no-mistakes version v1.84.0 (4822244) 2026-09-26T08:31:07Z
+   1 PushCommitWithOptionsSkippingHooks
+   1 PushWithOptionsSkippingHooks
+```
+
+What the daemon pushes:
+
+- The pipeline's delivery pushes to the real remote, and its evidence-branch pushes, are made by the daemon process, from `internal/pipeline/steps/push.go` and `internal/evidence/publish.go`.
+  A new or fast-forward branch is an ordinary push, and a branch whose history the pipeline rewrote is `--force-with-lease`, which the guard would refuse as a non-fast-forward update if it ran inside a fleet pane.
+  The daemon's per-run environment overlay carries only forge settings (`internal/forgecontext`), so no pane's git configuration reaches those pushes through a run.
+- Under a managed service the service manager starts the daemon, so it never inherits a pane's `GIT_CONFIG_COUNT`.
+  The check below reads the running daemon's environment for names only and prints counts, never values:
+
+```sh
+pid=$(launchctl list | awk '/no-mistakes\.daemon/ {print $1}')
+ps -E -ww -p "$pid" -o command= | tr ' ' '\n' | grep -c -e '^GIT_CONFIG' -e '^FM_TASK_ID' -e '^FM_HOME'
+ps -E -ww -p "$pid" -o command= | tr ' ' '\n' | grep -c '^PATH='
+```
+
+```text
+0
+1
+```
+
+The second count is the control: the same read sees the daemon's own `PATH`, so the first count of zero is not blind.
+A child process started with `GIT_CONFIG_COUNT=1` in its environment, read the same way, counted `1`.
+
+Limits:
+
+- Only the macOS launchd service was read.
+  When the CLI cannot install the service it starts the daemon detached with a copy of its own environment (`startDetachedDaemon` in `internal/daemon/selfexec.go`), so a daemon started that way from inside a fleet pane would carry that pane's git configuration and would run a configured guard on its delivery pushes.
+  A Linux systemd service was not read.
+- Both the source reading and the symbol check cover v1.84.0 only.
+  After a no-mistakes upgrade, run the commands above and read the push sites named here again, because a release that pushed from a pane without `--no-verify` would put every pipeline start behind the guard.
+
 ## Gemini
 
 The Gemini crewmate adapter was verified on 2026-09-04 with gemini-cli 0.58.0 on Linux, Node v24.20.0, tmux 3.4.
