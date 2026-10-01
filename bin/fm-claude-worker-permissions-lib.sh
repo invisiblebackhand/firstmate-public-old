@@ -55,9 +55,10 @@
 # never widen it: permissions.deny (permission rules, appended after the tracked
 # denies) and autoMode.hard_deny (classifier prose, which the spawn emits after
 # "$defaults" so the built-in rules are kept; the literal "$defaults" is
-# refused in the file). Any other key, a non-string or malformed rule, or an
-# unreadable file refuses the launch: Claude skips an invalid rule silently, so
-# accepting one would start a worker without the perimeter the file declares.
+# refused in the file). Any other key, an object or list of the wrong type
+# (false and null included), a non-string or malformed rule, or an unreadable
+# file refuses the launch: Claude skips an invalid rule silently, so accepting
+# one would start a worker without the perimeter the file declares.
 
 FM_CLAUDE_WORKER_PERMISSIONS_LIB_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Override only in tests.

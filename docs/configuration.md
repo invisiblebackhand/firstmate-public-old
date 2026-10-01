@@ -869,7 +869,7 @@ It is deny-only by construction and accepts exactly two keys:
 - `autoMode.hard_deny` is a list of plain-language rules for Claude's auto-mode classifier, emitted after the built-in `"$defaults"` entry so the built-in rules stay in force; the literal `"$defaults"` is refused in the file.
 
 Any other key, including every `allow`, `ask`, `soft_deny`, and `environment` form, refuses the launch, so the file can narrow a worker and never widen it.
-A file that is unreadable, is not valid JSON, or holds a malformed or non-string rule refuses the spawn or relaunch before any endpoint, worktree, or task record exists, and the diagnostic names the file and the problem.
+A file that is unreadable, is not valid JSON, holds an object or list of the wrong type, including `false` or `null`, or holds a malformed or non-string rule refuses the spawn or relaunch before any endpoint, worktree, or task record exists, and the diagnostic names the file and the problem.
 Claude skips an invalid rule silently, so accepting one would start a worker without the perimeter the file declares.
 The spawn's check is a conservative syntax check of its own, not Claude's parser, so to see Claude's verdict copy the file's `permissions` into a scratch directory's `.claude/settings.local.json` and run `claude doctor` there, which lists every rule it skips.
 `bin/fm-spawn.sh` reads the file on every spawn and relaunch, so a change applies at the next launch.
