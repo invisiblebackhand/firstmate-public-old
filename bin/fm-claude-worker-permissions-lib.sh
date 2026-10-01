@@ -81,20 +81,22 @@ def prose_problem:
   elif . == "$defaults" then "is \"$defaults\", which the spawn adds itself, first"
   else empty end;
 def entries($path; f): to_entries[] | . as $e | ($e.value | f) | "\($path)[\($e.key)] \(.)";
+# A key that is present keeps its value, even false or null, so the type checks below see it; only a missing key takes the default.
+def member($k; $default): if has($k) then .[$k] else $default end;
 if type != "object" then "must hold one JSON object"
 elif (keys - ["permissions", "autoMode"] | length) > 0 then
   "has the key \((keys - ["permissions", "autoMode"])[0] | @json); only permissions.deny and autoMode.hard_deny are accepted"
-elif ((.permissions // {}) | type) != "object" then "has a permissions value that is not an object"
-elif ((.permissions // {}) | keys - ["deny"] | length) > 0 then
+elif (member("permissions"; {}) | type) != "object" then "has a permissions value that is not an object"
+elif (member("permissions"; {}) | keys - ["deny"] | length) > 0 then
   "has permissions.\((.permissions | keys - ["deny"])[0]); only permissions.deny is accepted, so the file can narrow a worker and never widen it"
-elif ((.autoMode // {}) | type) != "object" then "has an autoMode value that is not an object"
-elif ((.autoMode // {}) | keys - ["hard_deny"] | length) > 0 then
+elif (member("autoMode"; {}) | type) != "object" then "has an autoMode value that is not an object"
+elif (member("autoMode"; {}) | keys - ["hard_deny"] | length) > 0 then
   "has autoMode.\((.autoMode | keys - ["hard_deny"])[0]); only autoMode.hard_deny is accepted"
-elif ((.permissions.deny // []) | type) != "array" then "has a permissions.deny that is not an array"
-elif ((.autoMode.hard_deny // []) | type) != "array" then "has an autoMode.hard_deny that is not an array"
+elif (member("permissions"; {}) | member("deny"; []) | type) != "array" then "has a permissions.deny that is not an array"
+elif (member("autoMode"; {}) | member("hard_deny"; []) | type) != "array" then "has an autoMode.hard_deny that is not an array"
 else
-  ([(.permissions.deny // []) | entries("permissions.deny"; rule_problem)]
-   + [(.autoMode.hard_deny // []) | entries("autoMode.hard_deny"; prose_problem)]) | first // empty
+  ([member("permissions"; {}) | member("deny"; []) | entries("permissions.deny"; rule_problem)]
+   + [member("autoMode"; {}) | member("hard_deny"; []) | entries("autoMode.hard_deny"; prose_problem)]) | first // empty
 end
 '
 
