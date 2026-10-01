@@ -205,7 +205,9 @@ fm_claude_launch_settings() { # <kind> <mode> <branch> <forge> [<private-file>] 
     | (  $r.deny_all_task_workers
        + (if $no_push then $r.deny_no_push_workers else [] end)
        + (if $config_dir != "" then
-            ($config_dir | rtrimstr("/")) as $dir
+            ($config_dir | rtrimstr("/") | explode
+              | map(if . == 92 or . == 42 or . == 63 or . == 91 or . == 93 then [92, .] else [.] end)
+              | add // [] | implode) as $dir
             | ["Edit(/\($dir)/settings.json)", "Edit(/\($dir)/settings.local.json)"]
           else [] end)
        + ($priv.permissions.deny // [])

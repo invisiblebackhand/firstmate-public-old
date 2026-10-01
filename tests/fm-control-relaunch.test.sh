@@ -1387,6 +1387,31 @@ test_cursor_session_binding_is_retired_on_a_harness_switch() {
 
 # --- 3 and 4. refusals before the agent is touched ---------------------------
 
+test_malformed_claude_perimeter_refuses_before_stopping_anything() {
+  local spec prior kind dir out rc before id=perimeter-preflight
+  for spec in 'claude ship' 'codex ship' 'claude scout'; do
+    read -r prior kind <<<"$spec"
+    dir=$(new_case "perimeter-$prior-$kind" "$id")
+    add_ship_task "$dir" "$id" "$prior"
+    if [ "$kind" = scout ]; then
+      sed 's/kind=ship/kind=scout/' "$dir/home/state/$id.meta" >"$dir/meta"
+      mv "$dir/meta" "$dir/home/state/$id.meta"
+    fi
+    printf '%s' "$prior" >"$dir/fake/command"
+    mkdir -p "$dir/home/config"
+    printf 'not json' >"$dir/home/config/claude-worker-permissions.json"
+    before=$(cat "$dir/home/state/$id.meta")
+    out=$(run_control "$dir" "$id" relaunch --harness claude --note 'preserve the session'); rc=$?
+    expect_code 1 "$rc" "a malformed Claude perimeter must refuse the replacement"
+    assert_contains "$out" 'claude-worker-permissions.json is not valid JSON' "the preflight must name the configuration error"
+    [ "$(cat "$dir/fake/command")" = "$prior" ] || fail "the preflight must preserve the running agent"
+    [ ! -s "$dir/fake/literal" ] && [ ! -s "$dir/fake/keys" ] || fail "the preflight must send nothing to the running agent"
+    [ "$(cat "$dir/home/state/$id.meta")" = "$before" ] || fail "the preflight must preserve metadata"
+    assert_not_contains "$(cat "$dir/home/data/$id/brief.md")" 'preserve the session' "the preflight must not append the relaunch note"
+  done
+  pass "malformed Claude private permissions refuse ship, scout, and harness-switch relaunches before stopping the current agent"
+}
+
 test_missing_worktree_refuses_before_stopping_anything() {
   local dir out rc
   dir=$(new_case nowt rl10)
@@ -2587,6 +2612,7 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract
 test_prefixed_prior_harness_wiring_is_still_retired
 test_muse_session_binding_is_retired_on_a_harness_switch
 test_cursor_session_binding_is_retired_on_a_harness_switch
+test_malformed_claude_perimeter_refuses_before_stopping_anything
 test_missing_worktree_refuses_before_stopping_anything
 test_missing_instructions_refuse_before_stopping_anything
 test_checkpoint_refusal_leaves_the_record_byte_identical

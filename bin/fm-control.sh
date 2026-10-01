@@ -176,6 +176,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-worker-account-lib.sh
 . "$SCRIPT_DIR/fm-worker-account-lib.sh"
+# shellcheck source=bin/fm-config-inherit-lib.sh
+. "$SCRIPT_DIR/fm-config-inherit-lib.sh"
+# shellcheck source=bin/fm-claude-worker-permissions-lib.sh
+. "$SCRIPT_DIR/fm-claude-worker-permissions-lib.sh"
 
 POLL=${FM_CONTROL_POLL:-0.5}
 SETTLE_WAIT=${FM_CONTROL_SETTLE_WAIT:-5}
@@ -858,6 +862,13 @@ resolve_relaunch_profile() {
   [ "$account_model" != default ] || account_model=
   fm_worker_account_select "$TARGET_HARNESS" "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}" \
     "$account_model" "$TARGET_HARNESS" >/dev/null || return 1
+  if [ "$TARGET_HARNESS" = claude ] && [ "$KIND" != secondmate ]; then
+    local permissions_file="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/claude-worker-permissions.json" permissions_present
+    permissions_present=$(fm_config_source_present "$permissions_file") || return 1
+    if [ "$permissions_present" = 1 ]; then
+      fm_claude_worker_private_check "$permissions_file" || return 1
+    fi
+  fi
 }
 
 # safe_checkpoint: prove, before anything is stopped, that the work a relaunch

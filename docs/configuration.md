@@ -829,7 +829,8 @@ The [Claude adapter reference](../.agents/skills/harness-adapters/references/har
 
 ## Claude worker permissions (config/claude-worker-permissions.json)
 
-Every Claude task worker, ship or scout, launches with a narrow set of permission rules that `bin/fm-spawn.sh` builds for that task's kind, delivery mode, and branch.
+Claude task workers, ship or scout, launched through the canonical Claude template receive narrow permission rules that `bin/fm-spawn.sh` builds for the task's kind, delivery mode, and branch.
+A raw Claude launch (`--harness` containing a full command) receives neither the per-launch rules nor the private-file check.
 The rules ride the worker's own per-launch `--settings`, so they reach only the workers a spawn starts: never your own Claude sessions, a firstmate supervisor, or a secondmate, whose launch settings stay exactly the base controls.
 Task workers also receive absolute-path edit denies for `settings.json` and `settings.local.json` when the selected account pin or inherited `CLAUDE_CONFIG_DIR` names a custom directory; the ordinary `~/.claude` denies remain.
 They apply under either [permission mode](#claude-permission-mode-configclaude-permission-mode), because a deny rule blocks in every mode and an allow rule only saves Claude's auto-mode classifier a pass.

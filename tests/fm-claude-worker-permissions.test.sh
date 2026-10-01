@@ -171,6 +171,21 @@ for spec in 'ship no-mistakes none' 'ship direct-PR none' 'ship local-only none'
     and $custom.permissions.allow == $ordinary.permissions.allow
   ' >/dev/null || fail "a custom directory must add exactly two settings denies and retain the ordinary rules: $spec"
 done
+pattern_repo="$TMP_ROOT/path-matching"
+git init -q "$pattern_repo"
+for dir_name in 'claude[work]' 'claude*work' 'claude?work' 'claude\work' 'claude]work['; do
+  custom=$(fm_claude_launch_settings ship no-mistakes "$BRANCH" none '' "$pattern_repo/$dir_name") || fail "the builder refused a literal metacharacter directory"
+  jq -r --arg root "$pattern_repo" '
+    .permissions.deny[-2:][] | ltrimstr("Edit(/") | rtrimstr(")") | ltrimstr($root)
+  ' <<<"$custom" >"$pattern_repo/.gitignore"
+  for file in settings.json settings.local.json; do
+    git -C "$pattern_repo" check-ignore --no-index -q -- "$dir_name/$file" || fail "the generated deny must match the literal path: $dir_name/$file"
+    git -C "$pattern_repo" check-ignore --no-index -q -- "claudeXwork/$file" && fail "the generated deny must not match a different directory: $dir_name"
+    git -C "$pattern_repo" check-ignore --no-index -q -- "$dir_name/other.json" && fail "the generated deny must not match unrelated files"
+  done
+done
+pass "the generated settings denies match literal pattern metacharacters through gitignore semantics"
+
 custom_sm=$(fm_claude_launch_settings secondmate '' '' none '' "$TMP_ROOT/claude-work")
 [ "$custom_sm" = "$BASE" ] || fail "a custom directory must not change secondmate settings"
 pass "custom configuration directories protect both settings files across task scopes; default and secondmate settings remain unchanged"

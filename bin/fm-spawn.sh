@@ -3151,9 +3151,10 @@ fi
 # Per-launch Claude --settings (bin/fm-claude-worker-permissions-lib.sh): built
 # here, before any endpoint, worktree, or record exists, so a malformed
 # config/claude-worker-permissions.json refuses a task worker's launch instead
-# of starting it without the perimeter the file declares. A launch whose
-# template carries no placeholder (another harness, or a raw command) never
-# reads the file, and a secondmate's launch ignores it.
+# of starting it without the perimeter the file declares. Only the canonical
+# Claude launch template receives these rules and the private-file check; a raw
+# Claude launch (--harness with a full command) receives neither. Other harnesses
+# and secondmate launches ignore the private file.
 CLAUDE_SETTINGS_JSON=
 case "$LAUNCH" in
 *__CLAUDESETTINGS__*)
