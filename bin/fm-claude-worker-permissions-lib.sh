@@ -205,8 +205,12 @@ fm_claude_launch_settings() { # <kind> <mode> <branch> <forge> [<private-file>] 
     | (  $r.deny_all_task_workers
        + (if $no_push then $r.deny_no_push_workers else [] end)
        + (if $config_dir != "" then
+            # Claude Code mishandles escaped question marks and backslashes.
+            # Its matcher preserves these hexadecimal literal character classes.
             ($config_dir | rtrimstr("/") | explode
-              | map(if . == 92 or . == 42 or . == 63 or . == 91 or . == 93 then [92, .] else [.] end)
+              | map(if . == 63 then ("[\\x3f]" | explode)
+                    elif . == 92 then ("[\\x5c]" | explode)
+                    elif . == 42 or . == 91 or . == 93 then [92, .] else [.] end)
               | add // [] | implode) as $dir
             | ["Edit(/\($dir)/settings.json)", "Edit(/\($dir)/settings.local.json)"]
           else [] end)

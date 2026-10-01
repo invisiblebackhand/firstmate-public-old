@@ -19,6 +19,7 @@
 # worker permission rules"):
 #
 #   FM_CLAUDE_WORKER_PERMISSIONS_LIVE_E2E=1 tests/fm-claude-worker-permissions-live-e2e.test.sh
+# Add --custom-settings-only to run just the literal configuration-path probes.
 #
 # SCRATCH ONLY. Every command runs in a throwaway worktree whose origin is a
 # local bare repository, with echo-only stand-ins for no-mistakes, gh, and
@@ -228,6 +229,55 @@ check() {
   done
   miss "[$phase] $label: expected $want, got $got ($detail)"
 }
+
+# Both denies must match literal paths, without catching neighboring directories
+# or other files. Git's matcher differs from Claude's for escaped question marks.
+custom_settings_paths() {
+  local lab="$OUT/custom-settings" dir_name config_dir settings stream file issued verdict want n=0 calls
+  make_lab "$lab" || fail "could not build the custom-settings lab"
+  mkdir -p "$lab/wt/claudeXwork"
+  for dir_name in 'claude-work' 'claude[work]' 'claude*work' 'claude?work' 'claude\work' 'claude]work[' 'claude[?]*work'; do
+    n=$((n + 1))
+    config_dir="$lab/wt/$dir_name"
+    mkdir -p "$config_dir"
+    settings=$(fm_claude_launch_settings ship no-mistakes "$FM_CPW_BRANCH" none '' "$config_dir") || fail "custom settings composition failed"
+    stream="$OUT/custom-settings-$n.jsonl"
+    claude_probe "$stream" "$lab/wt" dontAsk "$MODEL_DONTASK" "$settings" Write \
+      "This is a permission test on disposable synthetic files. Call Write once for each of these four absolute file paths in order, with content {}:
+$config_dir/settings.json
+$config_dir/settings.local.json
+$lab/wt/claudeXwork/settings.json
+$config_dir/other.json
+Use these paths literally, including punctuation and backslashes. Do not read files first. After a denial proceed to the next listed file; never retry or use another tool."
+    calls=$(stream_calls "$stream")
+    [ "$(printf '%s\n' "$calls" | wc -l | tr -d ' ')" = 4 ] || miss "[custom-settings] $dir_name: expected four Write calls, got: $calls"
+    for file in "$config_dir/settings.json" "$config_dir/settings.local.json" "$lab/wt/claudeXwork/settings.json" "$config_dir/other.json"; do
+      case "$file" in
+      "$config_dir/settings.json" | "$config_dir/settings.local.json") want=RULE_DENIED ;;
+      *) want=MODE_DENIED ;;
+      esac
+      verdict=
+      while IFS=$'\t' read -r verdict issued; do
+        [ "$issued" != "$file" ] || break
+        verdict=
+      done <<< "$calls"
+      check custom-settings "$dir_name: ${file##*/} ($file)" "$want" "$verdict" "$calls"
+      [ ! -e "$file" ] || miss "[custom-settings] a probe wrote $file"
+    done
+  done
+}
+
+case "${1:-}" in
+--custom-settings-only)
+  custom_settings_paths
+  cat "$RESULTS"
+  [ ! -s "$FAILED" ] || { cat "$FAILED"; fail "custom settings path matching failed"; }
+  pass "claude $CLAUDE_VERSION explicitly denies literal custom settings paths and leaves controls unmatched"
+  exit 0
+  ;;
+'') ;;
+*) fail "unknown live guard argument: $1" ;;
+esac
 
 # --- phase 1: claude doctor accepts every scope's rules ----------------------
 
@@ -446,6 +496,7 @@ for pair in 'echo forbidden-marker|RULE_DENIED' 'echo allowed-marker|RAN' 'cat ~
   check private "Bash $cmd" "$want" "$verdict" "$detail"
 done
 note "phase private: a synthetic private file's deny rules take effect through the builder"
+custom_settings_paths
 
 # --- phase 7: the user-scope replacement for no-mistakes approval -------------
 

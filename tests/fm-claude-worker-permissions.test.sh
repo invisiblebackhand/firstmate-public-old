@@ -173,7 +173,9 @@ for spec in 'ship no-mistakes none' 'ship direct-PR none' 'ship local-only none'
 done
 pattern_repo="$TMP_ROOT/path-matching"
 git init -q "$pattern_repo"
-for dir_name in 'claude[work]' 'claude*work' 'claude?work' 'claude\work' 'claude]work['; do
+# Question marks and backslashes use Claude-specific matcher syntax, covered by
+# the live guard rather than this Git matcher.
+for dir_name in 'claude[work]' 'claude*work' 'claude]work['; do
   custom=$(fm_claude_launch_settings ship no-mistakes "$BRANCH" none '' "$pattern_repo/$dir_name") || fail "the builder refused a literal metacharacter directory"
   jq -r --arg root "$pattern_repo" '
     .permissions.deny[-2:][] | ltrimstr("Edit(/") | rtrimstr(")") | ltrimstr($root)

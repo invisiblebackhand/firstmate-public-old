@@ -1112,6 +1112,18 @@ The half that needs Claude's own matcher is an opt-in guard that submits prompts
 FM_CLAUDE_WORKER_PERMISSIONS_LIVE_E2E=1 tests/fm-claude-worker-permissions-live-e2e.test.sh
 ```
 
+The custom configuration-directory path check also passed on 2026-10-01 with Claude Code 2.1.286 on macOS arm64:
+
+```sh
+mkdir -p .test-phase-tmp
+TMPDIR="$PWD/.test-phase-tmp" FM_CLAUDE_WORKER_PERMISSIONS_LIVE_E2E=1 bash tests/fm-claude-worker-permissions-live-e2e.test.sh --custom-settings-only
+```
+
+Its 28 exact Write calls covered both settings files, a sibling directory, and an unrelated file for ordinary names and names containing brackets, asterisks, question marks, backslashes, and combined pattern characters.
+Both settings files received `RULE_DENIED` in every directory; every control received `MODE_DENIED`, and no probe created a file.
+The terminal output was `ok - claude 2.1.286 (Claude Code) explicitly denies literal custom settings paths and leaves controls unmatched`.
+The builder uses hexadecimal literal character classes for question marks and backslashes because Claude's matcher does not match their ordinary gitignore escapes; the live guard is the authority for these paths.
+
 Every command runs in a throwaway worktree whose origin is a local bare repository, with echo-only stand-ins for `no-mistakes`, `gh`, and `gh-axi` first on `PATH`, so no real project, remote, daemon, or GitHub account was reachable.
 Claude ran in `dontAsk` mode, where a command no rule allows is refused and never run, or in `auto` mode on a classifier-capable model, and the guard refuses any other mode, so bypass mode was never run.
 Only the project and local settings sources loaded, so the operator's own user settings decided no verdict.
