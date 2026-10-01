@@ -105,6 +105,15 @@ nm	deny	both	gh api repos/x/y/pulls/1/merge -X PUT
 nm	deny	both	no-mistakes axi respond --action approve --yes
 nm	deny	both	no-mistakes axi respond --action approve -y
 nm	deny	both	no-mistakes axi run --yes
+# A repeated --action on a no-mistakes command is denied. The step-scoped approve allow ends in a wildcard and the CLI keeps the last --action, so without the deny a skip or fix would ride an allowed approve with no classifier review. The single approves at the top of the table are the controls.
+nm	deny	both	no-mistakes axi respond --action approve --step review --action skip
+nm	deny	both	no-mistakes axi respond --action approve --step review --action=fix
+nm	deny	both	no-mistakes axi respond --action=fix --step review --action approve
+nm	deny	both	no-mistakes axi respond --action approve --action approve
+nm	deny	both	no-mistakes axi run --action approve --action skip
+nm	deny	both	no-mistakes axi respond --action fix --findings F1 --instructions "never pass --action twice"
+pr	deny	both	no-mistakes axi respond --action approve --step review --action skip
+scout	deny	both	no-mistakes axi respond --action approve --step review --action skip
 # Wrappers, assignments, and compounds: Claude matches a deny rule past them.
 nm	deny	live	time git push origin main
 nm	deny	live	timeout 30 git push --force origin x

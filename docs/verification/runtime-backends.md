@@ -1295,6 +1295,7 @@ What the run shows:
 - A synthetic private file built through the real builder took effect over `Read`, `Write`, and `Bash` rules: each denied path or marker was `RULE_DENIED` and its control was refused only by the mode, and the tracked `//**/.claude/settings.local.json` edit rule denied a write to the project's local settings file.
 - The user-scope approval rule: with the broad legacy-prefix rule `Bash(no-mistakes axi respond:*)`, all five respond forms ran, and with the two exact rules `Bash(no-mistakes axi respond --action approve)` and `Bash(no-mistakes axi respond --action approve --step *)`, only the two approve forms ran.
   The guard emulated those rules at the project-local level, because it never loads or edits the operator's own user settings; the rule syntax is the same at every level, but user scope itself was not run.
+  The second exact rule ends in a wildcard step name, so it shares the repeated-`--action` gap recorded below.
 
 Limits:
 
@@ -1305,9 +1306,34 @@ Limits:
 - The classifier cases are single samples of a model's judgment, so a mismatch there is a finding to rerun and read, not by itself proof that the rules drifted.
 - The command table is the evidence: a form it does not list is decided by the mode or the classifier as it would be without these rules, and a command-text rule is not a security boundary.
 - Only macOS arm64 and 2.1.286 were run.
+- Rows added after the run above are not in its output, and Claude's own matcher has not decided them yet; see the subsection below.
 
 Refresh this section after any Claude Code upgrade by running the guard above.
 When it fails, read the mismatches it prints against the release, update `bin/fm-claude-worker-permissions.json`, the table, and the rule shapes' comments in `bin/fm-claude-worker-permissions-lib.sh`, and replace the version, date, and output here.
+
+### Repeated --action rows added after the recorded run
+
+The step-scoped approve allow `Bash(no-mistakes axi respond --action approve --step *)` ends in a wildcard, and `no-mistakes` keeps the last `--action` it is given, so `--action approve --step review --action skip` matched the allow and would have skipped the gate with no classifier review.
+The tracked deny `Bash(no-mistakes*--action*--action*)` closes that for every task worker, and the table gained eight rows for it: five repeated forms and a quoted `--instructions` value in the no-mistakes scope, and one repeated form each in the direct-PR and scout scopes, all expecting `RULE_DENIED`.
+The single approve rows at the top of the table stay the controls and still expect `RAN`.
+The recorded run's `# phase table: 106 rows` and every result above predate these rows, so they run on the next guard run, which replaces the output above and removes this note.
+Until then only the portable suite has applied them, through the simulated matcher, which denies all eight (104 rows, 68 denied) and, run against the previous rules file, allowed the skip form.
+
+The behavior behind the deny was observed on 2026-10-01 against no-mistakes v1.84.0 (4822244).
+Each command used two invalid action values and ran from a directory that is not a git repository, so no action could be applied; the action check is local, and the error names only the last value, in the space form, the equals form, and a mix:
+
+```text
+$ no-mistakes axi respond --action bogus-first --action bogus-last --wait 1s
+error: "unknown action \"bogus-last\""
+help[1]: "Valid actions: approve, fix, skip"
+$ no-mistakes axi respond --action=bogus-eq-first --action bogus-space-last --wait 1s
+error: "unknown action \"bogus-space-last\""
+$ no-mistakes axi respond --action bogus-space-first --action=bogus-eq-last --wait 1s
+error: "unknown action \"bogus-eq-last\""
+```
+
+The flag has no short alias and no accepted abbreviation: `-a`, `--act`, `--actio`, and `--ACTION` are each an unknown flag.
+Only `respond` takes `--action`, since `axi status --action x` is an unknown flag too, so the literal `--action` is the only spelling the deny has to match and a repeat on any other command is refused as defense in depth.
 
 ## Gemini
 

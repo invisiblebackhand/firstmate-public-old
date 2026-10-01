@@ -104,6 +104,7 @@
     "Bash(no-mistakes*--yes*)",
     "Bash(no-mistakes* -y)",
     "Bash(no-mistakes* -y *)",
+    "Bash(no-mistakes*--action*--action*)",
     "Edit(~/.claude/settings.json)",
     "Edit(~/.claude/settings.local.json)",
     "Edit(//**/.claude/settings.local.json)"

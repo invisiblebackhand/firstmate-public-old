@@ -45,8 +45,12 @@
 # matches nothing else, so the refspec-colon shape ends in ":**". Commit-flag
 # shapes (--no-verify, -n, --amend) match anywhere in a commit command, so an
 # inline -m message that names those flags is denied too: write such a message
-# with -F, or a heredoc, whose body Claude does not match. The version-scoped
-# evidence for all of this, including what the shapes do not catch, is
+# with -F, or a heredoc, whose body Claude does not match. The no-mistakes shapes
+# (--yes, -y, and a repeated --action) match anywhere in the command text too:
+# the step-scoped approve allow ends in a wildcard and the CLI keeps the last
+# --action, so only a deny on the repeat stops a skip or fix from riding that
+# allow. The version-scoped evidence for all of this, including what the shapes
+# do not catch, is
 # docs/verification/runtime-backends.md "Claude worker permission rules".
 #
 # PRIVATE PERIMETER. config/claude-worker-permissions.json is local, gitignored,
