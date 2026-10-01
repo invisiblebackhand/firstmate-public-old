@@ -856,7 +856,8 @@ A form the rules do not match is decided as it would be without them, by the per
 Allows are exact commands, so they cannot widen to other arguments, and the own-branch push allows are built only when the branch name uses letters, digits, `.`, `_`, `-`, and `/`; any other branch loses them with a notice and leaves its pushes to the classifier.
 Deny shapes are anchored to the subcommand, so a commit message that mentions a force push is untouched, but a commit command that carries `--no-verify`, ` -n`, or `--amend` anywhere in its text is denied, including inside an inline `-m` message: write such a message with `-F` or a heredoc, whose body Claude does not match.
 Rules combine across settings levels and a deny rule beats an allow rule from another level, but a broader allow at the user or project level still allows whatever the per-launch denies do not match, so keep user-level allows for commands such as `no-mistakes axi respond` as narrow as the per-launch ones.
-The shared denies have no per-task override, so a task that needs a merge, `reset --hard`, `clean`, `branch -D`, or a rebase followed by a force push needs a person to run it, and a promoted scout keeps its scout rules until it is relaunched, because the rules are built at launch.
+The shared denies have no per-task override, so a task that needs a merge, `reset --hard`, `clean`, `branch -D`, or a rebase followed by a force push needs a person to run it.
+The rules are built at launch, so a promoted scout keeps its scout rules, including the ban on pushing, until it is relaunched, which a direct-PR promotion needs before its worker can push.
 The dated verification record, with what the shapes do not catch, is [Claude worker permission rules](verification/runtime-backends.md#claude-worker-permission-rules), and `tests/fm-claude-worker-permissions-live-e2e.test.sh` refreshes it.
 
 ### Private perimeter
