@@ -165,7 +165,7 @@ scan_ref() {
   repo=$(git rev-parse --show-toplevel 2>/dev/null </dev/null) ||
     repo=$(git rev-parse --absolute-git-dir 2>/dev/null </dev/null) || repo=.
   gitleaks git --no-banner --redact --verbose --exit-code "$GITLEAKS_FINDING_EXIT" \
-    "--log-opts=${revs[*]}" "$repo" </dev/null >&2
+    "--log-opts=--diff-merges=separate ${revs[*]}" "$repo" </dev/null >&2
   rc=$?
   case $rc in
   0) ;;

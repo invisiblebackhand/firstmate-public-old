@@ -158,6 +158,23 @@ for pair in \
 done
 pass "the paired owner replacement allows approvals and denies repeated actions through the simulated matcher"
 
+for spec in 'ship no-mistakes none' 'ship direct-PR none' 'ship local-only none' 'ship direct-PR gerrit' 'scout none none'; do
+  read -r kind mode forge <<<"$spec"
+  ordinary=$(fm_claude_launch_settings "$kind" "$mode" "$BRANCH" "$forge") || fail "ordinary settings failed: $spec"
+  explicit_default=$(fm_claude_launch_settings "$kind" "$mode" "$BRANCH" "$forge" '' "$HOME/.claude/") || fail "default directory failed: $spec"
+  [ "$ordinary" = "$explicit_default" ] || fail "the default directory must add no rules: $spec"
+  custom=$(fm_claude_launch_settings "$kind" "$mode" "$BRANCH" "$forge" '' "$TMP_ROOT/claude-work/") || fail "custom directory failed: $spec"
+  jq -en --argjson ordinary "$ordinary" --argjson custom "$custom" --arg dir "$TMP_ROOT/claude-work" '
+    ($custom.permissions.deny - $ordinary.permissions.deny | sort)
+      == (["Edit(/\($dir)/settings.json)", "Edit(/\($dir)/settings.local.json)"] | sort)
+    and ($ordinary.permissions.deny - $custom.permissions.deny | length) == 0
+    and $custom.permissions.allow == $ordinary.permissions.allow
+  ' >/dev/null || fail "a custom directory must add exactly two settings denies and retain the ordinary rules: $spec"
+done
+custom_sm=$(fm_claude_launch_settings secondmate '' '' none '' "$TMP_ROOT/claude-work")
+[ "$custom_sm" = "$BASE" ] || fail "a custom directory must not change secondmate settings"
+pass "custom configuration directories protect both settings files across task scopes; default and secondmate settings remain unchanged"
+
 # --- the private perimeter -----------------------------------------------------
 
 priv() { printf '%s' "$2" >"$TMP_ROOT/$1.json"; printf '%s' "$TMP_ROOT/$1.json"; }

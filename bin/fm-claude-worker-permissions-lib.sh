@@ -3,7 +3,7 @@
 # (ship, scout, secondmate, and relaunch), built in one place.
 #
 # Usage: . bin/fm-claude-worker-permissions-lib.sh
-#   fm_claude_launch_settings <kind> <mode> <branch> <forge> [<private-file>]
+#   fm_claude_launch_settings <kind> <mode> <branch> <forge> [<private-file>] [<config-dir>]
 #       Prints the one-line JSON for --settings, or prints a diagnostic and
 #       returns non-zero. <kind> is ship, scout, or secondmate; <mode> is the
 #       ship's delivery mode; <forge> is none or gerrit.
@@ -144,9 +144,9 @@ fm_claude_worker_branch_plain() { # <branch>
   return 0
 }
 
-fm_claude_launch_settings() { # <kind> <mode> <branch> <forge> [<private-file>]
+fm_claude_launch_settings() { # <kind> <mode> <branch> <forge> [<private-file>] [<config-dir>]
   local kind=$1 mode=${2:-} branch=${3:-} forge=${4:-none} private=${5:-}
-  local branch_ok=false priv_json='{}'
+  local branch_ok=false priv_json='{}' config_dir=${6:-}
   case "$kind" in
   secondmate)
     printf '%s' "$FM_CLAUDE_BASE_SETTINGS"
@@ -168,6 +168,16 @@ fm_claude_launch_settings() { # <kind> <mode> <branch> <forge> [<private-file>]
     return 1
     ;;
   esac
+  case "$config_dir" in
+  '' | /*) ;;
+  *)
+    echo "error: Claude configuration directory must be an absolute path: $config_dir" >&2
+    return 1
+    ;;
+  esac
+  if [ "${config_dir%/}" = "${HOME:-}/.claude" ]; then
+    config_dir=
+  fi
   fm_claude_worker_rules_check || return 1
   if [ -n "$private" ]; then
     fm_claude_worker_private_check "$private" || return 1
@@ -182,7 +192,7 @@ fm_claude_launch_settings() { # <kind> <mode> <branch> <forge> [<private-file>]
   fi
   jq -cn --argjson base "$FM_CLAUDE_BASE_SETTINGS" --slurpfile rules "$FM_CLAUDE_WORKER_RULES" \
     --argjson priv "$priv_json" --arg kind "$kind" --arg mode "$mode" --arg forge "$forge" \
-    --arg branch "$branch" --argjson branch_ok "$branch_ok" '
+    --arg config_dir "$config_dir" --arg branch "$branch" --argjson branch_ok "$branch_ok" '
     $rules[0] as $r
     | ($kind == "ship") as $ship
     | ($ship and $mode == "no-mistakes") as $approve
@@ -194,6 +204,10 @@ fm_claude_launch_settings() { # <kind> <mode> <branch> <forge> [<private-file>]
       ) as $allow
     | (  $r.deny_all_task_workers
        + (if $no_push then $r.deny_no_push_workers else [] end)
+       + (if $config_dir != "" then
+            ($config_dir | rtrimstr("/")) as $dir
+            | ["Edit(/\($dir)/settings.json)", "Edit(/\($dir)/settings.local.json)"]
+          else [] end)
        + ($priv.permissions.deny // [])
       ) as $deny
     | ($priv.autoMode.hard_deny // []) as $hard

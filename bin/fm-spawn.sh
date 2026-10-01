@@ -3164,7 +3164,7 @@ case "$LAUNCH" in
     fi
     [ "$CLAUDE_WORKER_PERMS_PRESENT" != 1 ] || CLAUDE_WORKER_PERMS_FILE=$CONFIG/claude-worker-permissions.json
   fi
-  CLAUDE_SETTINGS_JSON=$(fm_claude_launch_settings "$KIND" "$MODE" "${BRANCH:-}" "${STANDING_FORGE:-none}" "$CLAUDE_WORKER_PERMS_FILE") || exit 1
+  CLAUDE_SETTINGS_JSON=$(fm_claude_launch_settings "$KIND" "$MODE" "${BRANCH:-}" "${STANDING_FORGE:-none}" "$CLAUDE_WORKER_PERMS_FILE" "${CLAUDE_CONFIG_DIR:-}") || exit 1
   ;;
 esac
 

@@ -48,7 +48,12 @@ done
 repo=${!#}
 # shellcheck disable=SC2086
 git -C "$repo" log --format='scanned:%s' $logopts >>"$log" 2>&1
+# shellcheck disable=SC2086
+patch=$(git -C "$repo" log -p -U0 $logopts) || exit 1
 code=${FM_FAKE_GITLEAKS_EXIT:-0}
+if [ -n "${FM_FAKE_GITLEAKS_SECRET:-}" ] && printf '%s\n' "$patch" | grep -F "+$FM_FAKE_GITLEAKS_SECRET" >/dev/null; then
+  code=42
+fi
 [ "$code" = 0 ] || printf 'fake gitleaks: exiting %s\n' "$code" >&2
 exit "$code"
 SH
@@ -93,7 +98,7 @@ make_world() {
 # stand-in gitleaks first on PATH. Sets OUT (stdout and stderr) and RC.
 gpush() {
   OUT=$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=$HOOKS \
-    PATH="$FAKEBIN:$PATH" FM_FAKE_GITLEAKS_LOG="$GLOG" FM_FAKE_GITLEAKS_EXIT="${GITLEAKS_EXIT:-0}" \
+    PATH="$FAKEBIN:$PATH" FM_FAKE_GITLEAKS_LOG="$GLOG" FM_FAKE_GITLEAKS_EXIT="${GITLEAKS_EXIT:-0}" FM_FAKE_GITLEAKS_SECRET="${GITLEAKS_SECRET:-}" \
     git -C "$WORK" push "$@" 2>&1)
   RC=$?
 }
@@ -158,6 +163,38 @@ test_merging_published_history_scans_commits_added_to_the_destination() {
   assert_contains "$(scanned)" 'task two' "the worker's own new commit must be scanned"
   assert_contains "$(scanned)" 'merge main into task' "the merge commit being pushed must be scanned"
   pass "merged history newly reachable from the destination ref is scanned"
+}
+
+test_a_secret_introduced_only_by_a_merge_is_refused() {
+  local before parent
+  make_world merge-secret
+  git -C "$WORK" checkout -q -b fm/task
+  commit_file "$WORK" base conflict.txt
+  gpush -q origin fm/task
+  expect_code 0 "$RC" "the clean baseline must reach the destination"$'\n'"$OUT"
+  before=$(remote_sha refs/heads/fm/task)
+  git -C "$WORK" checkout -q -b side
+  printf 'side\n' >"$WORK/conflict.txt"
+  git -C "$WORK" commit -qam 'side change'
+  git -C "$WORK" checkout -q fm/task
+  printf 'task\n' >"$WORK/conflict.txt"
+  git -C "$WORK" commit -qam 'task change'
+  git -C "$WORK" merge side >"$W/merge.log" 2>&1 && fail "the fixture must produce a conflict"
+  printf 'fm-merge-only-secret\n' >"$WORK/conflict.txt"
+  git -C "$WORK" add conflict.txt
+  git -C "$WORK" commit -qm 'resolve with secret'
+  for parent in HEAD^1 HEAD^2; do
+    assert_not_contains "$(git -C "$WORK" show "$parent:conflict.txt")" 'fm-merge-only-secret' "neither parent may contain the secret"
+  done
+  : >"$GLOG"
+  GITLEAKS_SECRET=fm-merge-only-secret
+  gpush origin fm/task
+  unset GITLEAKS_SECRET
+  [ "$RC" -ne 0 ] || fail "a secret introduced only by a merge must refuse the push"$'\n'"$OUT"
+  assert_contains "$OUT" 'gitleaks found a secret' "the merge patch must reach the scanner"
+  assert_contains "$(scanned)" 'side change' "side-branch history must remain in the scan"
+  assert_equals "$before" "$(remote_sha refs/heads/fm/task)" "the refused merge must not reach the destination"
+  pass "merge-only secrets refuse the push while side-branch history remains scanned"
 }
 
 test_a_first_push_to_a_remote_with_no_tracking_branches_scans_all_history() {
@@ -435,6 +472,7 @@ test_usage() {
 test_new_branch_push_passes_and_scans_all_reachable_commits
 test_fast_forward_push_scans_only_the_added_commit
 test_merging_published_history_scans_commits_added_to_the_destination
+test_a_secret_introduced_only_by_a_merge_is_refused
 test_a_first_push_to_a_remote_with_no_tracking_branches_scans_all_history
 test_a_commit_fetched_from_another_remote_is_scanned_and_refused
 test_a_repository_with_nothing_published_scans_everything_it_pushes
