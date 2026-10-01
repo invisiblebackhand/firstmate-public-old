@@ -27,13 +27,13 @@
 # and must not try - pressing Enter would select exit. The agent wedges before
 # it ever reads the brief. Registering the trust before launch is the only
 # control that reaches an interactive pane. The same reasoning covers Claude
-# Code's separate "Allow external CLAUDE.md file imports?" dialog, which
-# `--setting-sources project,local` (firstmate PR 10's minimal worker tool
-# surface) stopped suppressing: it renders whenever a loaded CLAUDE.md chain
-# reaches outside the project tree - for example an import in the operator's
-# own `~/.claude/CLAUDE.md`, or a `CLAUDE.md` in a directory above the
-# worktree - and it is gated the same fail-closed way as trust: cursor on
-# "No, disable", no arrow
+# Code's separate "Allow external CLAUDE.md file imports?" dialog. A worker
+# launches with Claude Code's default settings sources (user, project, and
+# local; firstmate passes no --setting-sources), so the dialog renders whenever
+# a loaded CLAUDE.md chain reaches outside the project tree - for example an
+# import in the operator's own `~/.claude/CLAUDE.md`, or a `CLAUDE.md` in a
+# directory above the worktree - and it is gated the same fail-closed way as
+# trust: cursor on "No, disable", no arrow
 # navigation from firstmate's steering plane. Only worktree mode reaches this
 # second dialog's flags: a secondmate home has no separate "project" entry to
 # carry consent forward from, so its registration stays trust-only.

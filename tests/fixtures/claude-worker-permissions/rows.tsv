@@ -1,0 +1,123 @@
+# scope<TAB>expected<TAB>via<TAB>command
+#
+# One table, two readers: tests/fm-claude-worker-permissions.test.sh rebuilds each
+# scope's rules with fm_claude_launch_settings and applies a simulated matcher, and
+# tests/fm-claude-worker-permissions-live-e2e.test.sh asks the real installed
+# Claude Code, which is the authority when the two disagree.
+#
+# scope     nm = ship, no-mistakes; pr = ship, direct-PR on branch fm/example-task;
+#           lo = ship, local-only; gerrit = ship, direct-PR on a Gerrit forge; scout.
+# expected  allow    an allow rule matches and no deny rule does
+#           deny     a deny rule matches
+#           none     no rule matches, so the permission mode or classifier decides
+#           readonly no rule matches and Claude runs it as a built-in read-only command
+# via       both     the simulated matcher and the live guard both check the row
+#           live     only the live guard does: it needs Claude's wrapper, assignment,
+#                    or compound-command handling, which the simulation does not model
+#
+# Allows and the commit-message cases that must stay free.
+nm	allow	both	git commit --allow-empty -m t1
+nm	allow	both	git commit --allow-empty -m "chore: clean up unused code"
+nm	allow	both	git commit --allow-empty -m "fix: merge conflict handling"
+nm	allow	both	git commit --allow-empty -m "feat: rebase onto main and push origin main"
+nm	allow	both	git commit --allow-empty -m "refactor: reset --hard docs, git branch -D guidance"
+nm	allow	both	git rebase origin/main
+nm	allow	both	git rebase main
+nm	allow	both	no-mistakes axi respond --action approve
+nm	allow	both	no-mistakes axi respond --action approve --step review
+nm	readonly	both	git log --oneline -3 --grep merge
+nm	readonly	both	git log --oneline -3 --grep "push --force"
+nm	readonly	both	git merge-base HEAD main
+# Shapes the rules leave to the permission mode and the classifier.
+nm	none	both	no-mistakes axi respond --action fix --findings F1,F2 --instructions "tighten the check"
+nm	none	both	no-mistakes axi respond --action skip --step review
+nm	none	both	no-mistakes axi respond --step review --action approve
+nm	none	both	no-mistakes axi respond --action approve --wait 8m
+nm	none	both	no-mistakes axi respond --action approve --reason "no behavior change"
+nm	none	both	git push origin fm/example-task
+nm	none	both	git tag probe-tag
+nm	none	both	git 'push' --force origin fm/example-task
+nm	none	both	git push --forc origin fm/example-task
+nm	none	both	GIT_DIR=/private/tmp/does-not-exist git commit --allow-empty -m x
+nm	none	both	cd /private/tmp && git commit --allow-empty -m outside
+# Commit flags are matched anywhere in a commit command, so a message that names one is denied: write it with -F or a heredoc.
+nm	deny	both	git commit --allow-empty --no-verify -m t2
+nm	deny	both	git commit --allow-empty -n -m t3
+nm	deny	both	git commit --amend --no-edit
+nm	deny	both	git commit --allow-empty -m "docs: explain push --force and --no-verify refusals"
+nm	deny	both	git -C . commit --amend --no-edit
+# Rebase.
+nm	deny	both	git rebase origin/main main
+nm	deny	both	git rebase -x true origin/main
+nm	deny	both	git rebase --exec true origin/main
+# Pushes.
+nm	deny	both	git push --force origin fm/example-task
+nm	deny	both	git push -f origin fm/example-task
+nm	deny	both	git push origin fm/example-task --force-with-lease
+nm	deny	both	git push -fu origin fm/example-task
+nm	deny	both	git push origin +fm/example-task
+nm	deny	both	git push origin fm/example-task:main
+nm	deny	both	git push origin HEAD:main
+nm	deny	both	git push origin fm/example-task:refs/heads/main
+nm	deny	both	git push origin main
+nm	deny	both	git push origin fm/example-task main
+nm	deny	both	git push --mirror origin
+nm	deny	both	git push --all origin
+nm	deny	both	git push --delete origin fm/example-task
+nm	deny	both	git push origin :fm/example-task
+nm	deny	both	git push --tags origin
+nm	deny	both	git push --no-verify origin fm/example-task
+nm	deny	both	git push
+nm	deny	both	git push origin HEAD
+nm	deny	both	git push origin @:main
+nm	deny	both	git -C . push --force origin fm/example-task
+nm	deny	both	git -c push.default=current push origin main
+nm	deny	both	git --git-dir=../main/.git push origin main
+nm	deny	both	git -C . push origin :fm/example-task
+nm	deny	both	git -C . push
+# Merges, resets, cleans, branch deletes.
+nm	deny	both	git merge main
+nm	deny	both	git -C . merge main
+nm	deny	both	git reset --hard HEAD
+nm	deny	both	git -C . reset --hard HEAD
+nm	deny	both	git clean -n
+nm	deny	both	git -C . clean -n
+nm	deny	both	git branch -D nosuchbranch
+nm	deny	both	git branch --force nosuch main
+nm	deny	both	git -C . branch -D nosuchbranch
+nm	deny	both	gh pr merge 1
+nm	deny	both	gh -R x/y pr merge 1
+nm	deny	both	gh-axi pr merge 1
+nm	deny	both	gh api repos/x/y/pulls/1/merge -X PUT
+# The --yes ban.
+nm	deny	both	no-mistakes axi respond --action approve --yes
+nm	deny	both	no-mistakes axi respond --action approve -y
+nm	deny	both	no-mistakes axi run --yes
+# Wrappers, assignments, and compounds: Claude matches a deny rule past them.
+nm	deny	live	time git push origin main
+nm	deny	live	timeout 30 git push --force origin x
+nm	deny	live	echo ok && git push origin main
+nm	deny	live	FOO=bar git merge main
+nm	deny	live	GIT_DIR=/nonexistent/.git git push --force origin x
+# direct-PR: the task's own branch, exactly, and nothing wider.
+pr	allow	both	git push -u origin fm/example-task
+pr	allow	both	git push origin fm/example-task
+pr	allow	both	git push --set-upstream origin fm/example-task
+pr	allow	both	git commit --allow-empty -m t1
+pr	none	both	git push origin fm/other-task
+pr	none	both	no-mistakes axi respond --action approve
+pr	deny	both	git push --force origin fm/example-task
+pr	deny	both	git push origin main
+# local-only and a Gerrit forge: no push at all.
+lo	allow	both	git commit --allow-empty -m t1
+lo	deny	both	git push -u origin fm/example-task
+lo	deny	both	git push origin fm/example-task
+lo	deny	both	git -C . push origin fm/example-task
+gerrit	allow	both	git commit --allow-empty -m t1
+gerrit	deny	both	git push origin fm/example-task
+gerrit	deny	both	git -C . push origin fm/example-task
+# scout: no allows, no push, and the base denies.
+scout	none	both	git commit --allow-empty -m t1
+scout	deny	both	git push origin fm/example-task
+scout	deny	both	git -C . push origin fm/example-task
+scout	deny	both	git merge main

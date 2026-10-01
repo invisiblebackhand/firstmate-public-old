@@ -1055,7 +1055,7 @@ test_claude_forwards_firstmate_config_dir_when_set() {
   status=$?
   expect_code 0 "$status" "claude spawn with CLAUDE_CONFIG_DIR set should succeed"
   launch=$(cat "$LAUNCH_LOG")
-  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},\"skillOverrides\":{\"auto-mode-setup\":\"off\"}}'" \
+  assert_contains "$launch" "CLAUDE_CONFIG_DIR='$CASE_DIR/claude-work' env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},\"skillOverrides\":{\"auto-mode-setup\":\"off\"}," \
     "claude launch did not forward firstmate's CLAUDE_CONFIG_DIR to the crewmate pane"
   pass "claude forwards firstmate's CLAUDE_CONFIG_DIR so the crewmate uses the same credential store"
 }
@@ -1338,6 +1338,174 @@ test_non_claude_launch_carries_no_auto_mode_setup_override() {
   assert_not_contains "$launch" "skillOverrides" \
     "a non-claude launch must not receive the claude-specific settings overlay"
   pass "non-claude harness launches do not receive the claude auto-mode setup override"
+}
+
+# Per-launch worker permission rules (bin/fm-claude-worker-permissions-lib.sh).
+# tests/fm-claude-worker-permissions.test.sh owns what the JSON carries for each
+# kind, mode, forge, and private file. These pin the spawn's side: it hands the
+# builder the task's own kind, mode, and branch, reads the private file only for
+# a task worker's Claude launch, and refuses a malformed file before anything is
+# created.
+launch_allows() {  # <launch> <rule>: succeeds when the launch's settings allow <rule>
+  claude_launch_settings_json "$1" | jq -e --arg r "$2" '(.permissions.allow // []) | index($r) != null' >/dev/null
+}
+launch_denies() {  # <launch> <rule>
+  claude_launch_settings_json "$1" | jq -e --arg r "$2" '(.permissions.deny // []) | index($r) != null' >/dev/null
+}
+
+test_claude_ship_launch_carries_its_mode_scoped_worker_permissions() {
+  local rec id out status launch
+  id=profile-claude-perms-nm-z30
+  rec=$(make_spawn_case profile-claude-perms-nm claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "claude no-mistakes ship spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  launch_allows "$launch" 'Bash(git commit *)' || fail "a ship launch lost the commit allow: $launch"
+  launch_allows "$launch" 'Bash(no-mistakes axi respond --action approve)' \
+    || fail "a no-mistakes ship launch must allow the gate approval"
+  launch_allows "$launch" "Bash(git push origin fm/$id)" && fail "a no-mistakes ship launch must not allow pushes"
+  launch_denies "$launch" 'Bash(git merge *)' || fail "a ship launch must deny merges"
+  [ "$(claude_launch_settings_json "$launch" | jq -r '.autoMode // "absent"')" = absent ] \
+    || fail "with no private file a launch must carry no autoMode"
+  pass "a claude no-mistakes ship launch carries the mode's allows, the tracked denies, and no autoMode"
+}
+
+test_claude_direct_pr_ship_launch_allows_only_its_own_branch_push() {
+  local rec id out status launch
+  id=profile-claude-perms-pr-z31
+  rec=$(make_spawn_case profile-claude-perms-pr claude "$id")
+  read_case_record "$rec"
+
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode direct-PR --yolo off)
+  status=$?
+  expect_code 0 "$status" "claude direct-PR ship spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  launch_allows "$launch" "Bash(git push origin fm/$id)" || fail "a direct-PR launch must allow a push of its own branch: $launch"
+  launch_allows "$launch" "Bash(git push -u origin fm/$id)" || fail "a direct-PR launch must allow the first push of its own branch"
+  launch_allows "$launch" 'Bash(no-mistakes axi respond --action approve)' && fail "a direct-PR launch must not allow gate approval"
+  launch_denies "$launch" 'Bash(git push*--force*)' || fail "a direct-PR launch must still deny a force push"
+  launch_denies "$launch" 'Bash(git push)' || fail "a direct-PR launch must still deny a bare push"
+  pass "a claude direct-PR ship launch allows pushes of its own branch only, and still denies the unsafe forms"
+}
+
+test_claude_local_only_and_scout_launches_cannot_push() {
+  local rec id out status launch
+  id=profile-claude-perms-lo-z32
+  rec=$(make_spawn_case profile-claude-perms-lo claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --mode local-only --yolo off)
+  status=$?
+  expect_code 0 "$status" "claude local-only ship spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  launch_denies "$launch" 'Bash(git push *)' || fail "a local-only launch must deny every push: $launch"
+  launch_allows "$launch" 'Bash(git commit *)' || fail "a local-only launch keeps the commit allow"
+
+  id=profile-claude-perms-scout-z33
+  rec=$(make_spawn_case profile-claude-perms-scout claude "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout)
+  status=$?
+  expect_code 0 "$status" "claude scout spawn should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  launch_denies "$launch" 'Bash(git push *)' || fail "a scout launch must deny every push: $launch"
+  [ "$(claude_launch_settings_json "$launch" | jq -r '.permissions | has("allow") | tostring')" = false ] \
+    || fail "a scout launch must carry no allow rules"
+  pass "claude local-only ship and scout launches deny every push, and a scout allows nothing"
+}
+
+test_claude_private_worker_permissions_reach_task_launches_and_never_a_secondmate() {
+  local rec id out status launch sm json
+  id=profile-claude-perms-private-z34
+  rec=$(make_spawn_case profile-claude-perms-private claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"permissions":{"deny":["Read(~/.example-private/**)"]},"autoMode":{"hard_deny":["Never open the example connection."]}}' \
+    > "$HOME_DIR/config/claude-worker-permissions.json"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "a valid private worker-permissions file must be accepted"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  launch_denies "$launch" 'Read(~/.example-private/**)' || fail "the private deny did not reach the launch: $launch"
+  launch_denies "$launch" 'Bash(git merge *)' || fail "the tracked denies must still ride a launch with private denies"
+  json=$(claude_launch_settings_json "$launch")
+  # shellcheck disable=SC2016  # "$defaults" is a literal token Claude Code expands, not a shell variable
+  [ "$(printf '%s' "$json" | jq -c '.autoMode.hard_deny')" = '["$defaults","Never open the example connection."]' ] \
+    || fail "the private prose must follow \"\$defaults\": $json"
+  assert_auto_mode_setup_off "$launch" "claude crewmate with a private file"
+
+  id=profile-claude-perms-private-sm-z35
+  rec=$(make_spawn_case profile-claude-perms-private-sm claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' '{"permissions":{"deny":["Read(~/.example-private/**)"]}}' > "$HOME_DIR/config/claude-worker-permissions.json"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "a secondmate spawn must ignore the private file"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  [ "$(claude_launch_settings_json "$launch")" = '{"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},"skillOverrides":{"auto-mode-setup":"off"}}' ] \
+    || fail "a secondmate's --settings must stay the base controls: $launch"
+  pass "the private file's denies and prose reach a task worker's launch after the tracked rules, and never a secondmate's"
+}
+
+test_claude_malformed_private_worker_permissions_refuse_before_endpoint_or_metadata() {
+  local rec id out status bad
+  id=profile-claude-perms-bad-z36
+  rec=$(make_spawn_case profile-claude-perms-bad claude "$id")
+  read_case_record "$rec"
+  bad="$HOME_DIR/config/claude-worker-permissions.json"
+  printf '%s\n' '{"permissions":{"allow":["Bash(git push *)"]}}' > "$bad"
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "a private file that tries to allow must refuse the launch"$'\n'"$out"
+  assert_contains "$out" "config/claude-worker-permissions.json" "the refusal must name the file"
+  assert_contains "$out" "only permissions.deny is accepted" "the refusal must say why"
+  [ ! -s "$LAUNCH_LOG" ] || fail "a refused launch must start nothing (got: $(cat "$LAUNCH_LOG"))"
+  assert_absent "$HOME_DIR/state/$id.meta" "the refusal must come before meta is written"
+
+  printf '%s\n' 'not json' > "$bad"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout)
+  status=$?
+  expect_code 1 "$status" "an unparseable private file must refuse a scout launch too"$'\n'"$out"
+  assert_contains "$out" "not valid JSON" "an unparseable file must say so"
+
+  rm -f "$bad"
+  ln -s "$CASE_DIR/does-not-exist.json" "$bad"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 1 "$status" "a dangling private path must refuse the launch"$'\n'"$out"
+  assert_contains "$out" "readable regular file" "a dangling path must say what it needs"
+  assert_absent "$HOME_DIR/state/$id.meta" "a dangling path must also refuse before meta is written"
+  pass "a malformed, unparseable, or dangling private worker-permissions file refuses a Claude task launch before any endpoint or metadata"
+}
+
+test_non_claude_and_secondmate_launches_ignore_a_malformed_private_worker_permissions_file() {
+  local rec id out status sm
+  id=profile-codex-perms-bad-z37
+  rec=$(make_spawn_case profile-codex-perms-bad codex "$id")
+  read_case_record "$rec"
+  printf '%s\n' 'not json' > "$HOME_DIR/config/claude-worker-permissions.json"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "a codex launch must not read the Claude private file"$'\n'"$out"
+  assert_not_contains "$(cat "$LAUNCH_LOG")" "permissions" "a codex launch must carry no Claude permission rules"
+
+  id=profile-claude-perms-bad-sm-z38
+  rec=$(make_spawn_case profile-claude-perms-bad-sm claude "$id")
+  read_case_record "$rec"
+  printf '%s\n' 'not json' > "$HOME_DIR/config/claude-worker-permissions.json"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "a secondmate launch must not read the private file"$'\n'"$out"
+  pass "a codex launch and a Claude secondmate launch never read config/claude-worker-permissions.json"
 }
 
 test_active_dispatch_profile_does_not_block_secondmate_launch() {
@@ -1670,13 +1838,22 @@ claude_launch_brief_arg() {  # <launch>
   )
 }
 
+# The inline --settings argument of a launch. This suite owns everything around
+# it; tests/fm-claude-worker-permissions.test.sh owns what the JSON carries for
+# each kind, mode, and forge, so the canonical launch below reuses the argument
+# it is given and assert_auto_mode_setup_off keeps the base controls honest.
+claude_launch_settings_json() {  # <launch>
+  printf '%s' "$1" | sed -n "s/.* --settings '\\([^']*\\)'.*/\\1/p"
+}
+
 claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
-  local doorbell quoted
+  local doorbell quoted settings
   doorbell=$(claude_launch_brief_arg "$1")
+  settings=$(claude_launch_settings_json "$1")
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$2" "$3")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false},\"skillOverrides\":{\"auto-mode-setup\":\"off\"}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(ai_trailer_hooks_prefix "$2" "$3")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 --settings '$settings' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 test_claude_permission_mode_bypass_matches_absent_launch() {
@@ -1825,6 +2002,12 @@ test_claude_scout_launch_turns_off_the_auto_mode_setup_offer
 test_claude_secondmate_launch_turns_off_the_auto_mode_setup_offer
 test_claude_auto_permission_mode_launch_turns_off_the_auto_mode_setup_offer
 test_non_claude_launch_carries_no_auto_mode_setup_override
+test_claude_ship_launch_carries_its_mode_scoped_worker_permissions
+test_claude_direct_pr_ship_launch_allows_only_its_own_branch_push
+test_claude_local_only_and_scout_launches_cannot_push
+test_claude_private_worker_permissions_reach_task_launches_and_never_a_secondmate
+test_claude_malformed_private_worker_permissions_refuse_before_endpoint_or_metadata
+test_non_claude_and_secondmate_launches_ignore_a_malformed_private_worker_permissions_file
 test_active_dispatch_profile_does_not_block_secondmate_launch
 
 echo "# all fm-spawn-dispatch-profile tests passed"

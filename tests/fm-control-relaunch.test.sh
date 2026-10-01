@@ -389,6 +389,41 @@ test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint() {
   pass "fm-control relaunch: a same-harness relaunch replaces the agent in the same endpoint and worktree"
 }
 
+# The per-launch --settings JSON of the newest launch the stub recorded.
+relaunch_settings_json() {  # <case-dir>
+  sed -n "s/.* --settings '\\([^']*\\)'.*/\\1/p" "$1/fake/literal" | tail -n 1
+}
+
+# A relaunch rebuilds the worker's permission rules from the task's own record,
+# so the replacement keeps the mode's allows and its recorded branch, a scout
+# stays a scout, and a secondmate keeps its unchanged base controls.
+test_relaunch_rebuilds_claude_worker_permissions_from_the_task_record() {
+  local dir out rc json meta
+  dir=$(new_case relaunch-perms rl50)
+  add_ship_task "$dir" rl50 claude
+  meta="$dir/home/state/rl50.meta"
+  grep -v '^mode=' "$meta" > "$meta.new" && mv "$meta.new" "$meta"
+  printf '%s\n' 'mode=direct-PR' 'branch=fm/rl50' >> "$meta"
+  out=$(run_control "$dir" rl50 relaunch --note "continuing"); rc=$?
+  expect_code 0 "$rc" "a direct-PR relaunch should succeed"$'\n'"$out"
+  json=$(relaunch_settings_json "$dir")
+  printf '%s' "$json" | jq -e '.permissions.allow | index("Bash(git push origin fm/rl50)") != null' >/dev/null \
+    || fail "a direct-PR relaunch must allow a push of the recorded branch: $json"
+  printf '%s' "$json" | jq -e '.permissions.deny | index("Bash(git push*--force*)") != null' >/dev/null \
+    || fail "a direct-PR relaunch must keep the tracked denies: $json"
+
+  dir=$(new_case relaunch-perms-nm rl51)
+  add_ship_task "$dir" rl51 claude
+  out=$(run_control "$dir" rl51 relaunch --note "continuing"); rc=$?
+  expect_code 0 "$rc" "a no-mistakes relaunch should succeed"$'\n'"$out"
+  json=$(relaunch_settings_json "$dir")
+  printf '%s' "$json" | jq -e '.permissions.allow | index("Bash(no-mistakes axi respond --action approve)") != null' >/dev/null \
+    || fail "a no-mistakes relaunch must allow the gate approval: $json"
+  printf '%s' "$json" | jq -e '[.permissions.allow[] | select(startswith("Bash(git push"))] | length == 0' >/dev/null \
+    || fail "a no-mistakes relaunch must carry no push allow: $json"
+  pass "fm-control relaunch: the replacement's permission rules come from the task's recorded mode and branch"
+}
+
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text() {
   local dir out rc
   dir=$(new_case pending-exit rl43)
@@ -1218,7 +1253,7 @@ test_spawn_relaunch_of_promoted_scout_uses_the_recorded_branch() {
 }
 
 test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
-  local dir home id brief launch out mode rule
+  local dir home id brief launch out mode rule settings want
   for mode in no-mistakes direct-PR local-only; do
     id="rl-promoted-${mode}"
     dir=$(new_case "promoted-scout-$mode" "$id")
@@ -1278,6 +1313,16 @@ test_promoted_scout_relaunch_receives_the_current_delivery_contract() {
       "$mode: the replacement launch did not receive the carry-over boundary"
     assert_grep "Delivery contract: mode=$mode" "$launch" \
       "$mode: the replacement launch did not receive the actual ship delivery mode"
+    settings=$(relaunch_settings_json "$dir")
+    printf '%s' "$settings" | jq -e '.permissions.allow | index("Bash(git commit *)") != null' >/dev/null \
+      || fail "$mode: the promoted task's replacement launch still carries scout permission rules: $settings"
+    case "$mode" in
+      no-mistakes) want='Bash(no-mistakes axi respond --action approve)' ;;
+      direct-PR) want="Bash(git push origin fm/$id)" ;;
+      *) want='Bash(git rebase --continue)' ;;
+    esac
+    printf '%s' "$settings" | jq -e --arg w "$want" '.permissions.allow | index($w) != null' >/dev/null \
+      || fail "$mode: the replacement launch did not receive the new mode's allow $want: $settings"
   done
   pass "fm-promote/fm-spawn --relaunch: the current ship contract supersedes stale scout delivery text"
 }
@@ -2505,6 +2550,7 @@ test_relaunch_moves_a_drifted_item_back_in_flight() {
 }
 
 test_same_harness_relaunch_keeps_identity_and_reuses_the_endpoint
+test_relaunch_rebuilds_claude_worker_permissions_from_the_task_record
 test_relaunch_refuses_before_exit_when_the_composer_holds_pending_text
 test_relaunch_refuses_before_exit_when_the_composer_state_is_unproven
 test_relaunch_from_linked_home_preserves_recorded_worktree
