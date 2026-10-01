@@ -14,21 +14,17 @@ set -u
 # shellcheck source=bin/fm-claude-worker-permissions-lib.sh
 . "$ROOT/bin/fm-claude-worker-permissions-lib.sh"
 
-ROWS="$ROOT/tests/fixtures/claude-worker-permissions/rows.tsv"
-BRANCH=fm/example-task
+FIXTURES="$ROOT/tests/fixtures/claude-worker-permissions"
+ROWS="$FIXTURES/rows.tsv"
+# shellcheck source=tests/fixtures/claude-worker-permissions/scopes.sh
+. "$FIXTURES/scopes.sh"
+BRANCH=$FM_CPW_BRANCH
 TMP_ROOT=$(fm_test_tmproot fm-claude-worker-permissions)
 BASE='{"feedbackDrafts":"off","attribution":{"commit":"","pr":"","sessionUrl":false},"skillOverrides":{"auto-mode-setup":"off"}}'
 
-# scope -> the launch it stands for: kind, mode, forge
+# The builder's own status is the answer: a refusal must reach the caller.
 scope_settings() {  # <scope> [<private-file>]
-  case "$1" in
-  nm) fm_claude_launch_settings ship no-mistakes "$BRANCH" none "${2:-}" ;;
-  pr) fm_claude_launch_settings ship direct-PR "$BRANCH" none "${2:-}" ;;
-  lo) fm_claude_launch_settings ship local-only "$BRANCH" none "${2:-}" ;;
-  gerrit) fm_claude_launch_settings ship direct-PR "$BRANCH" gerrit "${2:-}" ;;
-  scout) fm_claude_launch_settings scout '' '' none "${2:-}" ;;
-  *) fail "unknown scope $1" ;;
-  esac
+  fm_cpw_scope_settings "$@"
 }
 
 # --- the base controls and the secondmate's byte-identical JSON ----------------
@@ -185,6 +181,13 @@ sm_with_priv=$(fm_claude_launch_settings secondmate '' '' none "$good")
 scout_priv=$(scope_settings scout "$good")
 printf '%s' "$scout_priv" | jq -e '.autoMode.hard_deny[0] == "$defaults"' >/dev/null || fail "a scout carries the private prose too"
 pass "the private file reaches every task worker and no secondmate"
+
+# An MCP server name may carry hyphens, and a rule may deny a whole server.
+mcp=$(priv mcp '{"permissions":{"deny":["mcp__example-server__*","mcp__example-server__a_tool","WebFetch(domain:example.test)"]}}')
+json=$(scope_settings nm "$mcp") || fail "an MCP rule with a hyphenated server name must be accepted"
+printf '%s' "$json" | jq -e '.permissions.deny[-3:] == ["mcp__example-server__*","mcp__example-server__a_tool","WebFetch(domain:example.test)"]' >/dev/null \
+  || fail "MCP and WebFetch rules must reach the launch unchanged: $json"
+pass "an MCP rule naming a hyphenated server, and a WebFetch domain rule, are accepted"
 
 empty=$(priv empty '{}')
 [ "$(scope_settings nm "$empty")" = "$nm" ] || fail "an empty private file must change nothing"

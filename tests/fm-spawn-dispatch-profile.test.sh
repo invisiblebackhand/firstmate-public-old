@@ -1484,6 +1484,47 @@ test_claude_malformed_private_worker_permissions_refuse_before_endpoint_or_metad
   pass "a malformed, unparseable, or dangling private worker-permissions file refuses a Claude task launch before any endpoint or metadata"
 }
 
+# The --settings argument as the shell that sources the staged launch reads it,
+# so every quote, dollar sign, and backslash in a private rule is shown to
+# survive the shell quoting round trip, not just to sit in the launch text.
+claude_launch_settings_arg() {  # <launch>
+  local command=${1#*; }
+  (
+    eval "set -- ${command#*; }"
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --settings ]; then
+        printf '%s' "${2-}"
+        return 0
+      fi
+      shift
+    done
+    return 1
+  )
+}
+
+test_claude_private_worker_permissions_survive_the_launch_quoting() {
+  local rec id out status launch want got private
+  id=profile-claude-perms-quote-z39
+  rec=$(make_spawn_case profile-claude-perms-quote claude "$id")
+  read_case_record "$rec"
+  private="$HOME_DIR/config/claude-worker-permissions.json"
+  cat > "$private" <<'JSON'
+{"permissions":{"deny":["Bash(*$HOME/.example/*)","Bash(*it's*)","Bash(*a\\b*)","Bash(*\"quoted\"*)"]},"autoMode":{"hard_deny":["Never run `rm -rf $HOME`, or anything it's like."]}}
+JSON
+
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+  status=$?
+  expect_code 0 "$status" "a private file with quotes, dollar signs, and backslashes must be accepted"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  want=$(. "$ROOT/bin/fm-claude-worker-permissions-lib.sh"; fm_claude_launch_settings ship no-mistakes "fm/$id" none "$private") \
+    || fail "the builder refused the quoting fixture"
+  got=$(claude_launch_settings_arg "$launch") || fail "the launch carries no --settings argument: $launch"
+  [ "$got" = "$want" ] || fail "the --settings argument did not survive shell quoting"$'\n'"want: $want"$'\n'"got:  $got"
+  printf '%s' "$got" | jq -e '.permissions.deny | index("Bash(*it'"'"'s*)") != null and index("Bash(*$HOME/.example/*)") != null' >/dev/null \
+    || fail "a quoted private rule did not reach the launch intact: $got"
+  pass "quotes, dollar signs, and backslashes in a private rule reach the launch's --settings argument unchanged"
+}
+
 test_non_claude_and_secondmate_launches_ignore_a_malformed_private_worker_permissions_file() {
   local rec id out status sm
   id=profile-codex-perms-bad-z37
@@ -2006,6 +2047,7 @@ test_claude_ship_launch_carries_its_mode_scoped_worker_permissions
 test_claude_direct_pr_ship_launch_allows_only_its_own_branch_push
 test_claude_local_only_and_scout_launches_cannot_push
 test_claude_private_worker_permissions_reach_task_launches_and_never_a_secondmate
+test_claude_private_worker_permissions_survive_the_launch_quoting
 test_claude_malformed_private_worker_permissions_refuse_before_endpoint_or_metadata
 test_non_claude_and_secondmate_launches_ignore_a_malformed_private_worker_permissions_file
 test_active_dispatch_profile_does_not_block_secondmate_launch

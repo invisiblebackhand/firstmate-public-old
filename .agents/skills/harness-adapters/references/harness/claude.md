@@ -13,6 +13,8 @@ Busy hooks verified 2026-07-28 on Claude Code 2.1.220.
 | Model | `--model <model>`; discover through the interactive `/model` picker, with alias or full-name shape documented by `claude --help`. |
 | Effort | `--effort <low\|medium\|high\|xhigh\|max>`, verified on 2.1.196. |
 | Permissions | `--dangerously-skip-permissions` by default, or `--permission-mode auto` when `config/claude-permission-mode` is `auto`; the `auto` shape verified on 2.1.269, and `../../../../../docs/configuration.md` "Claude permission mode" owns the file. |
+| Worker permission rules | A ship or scout launch carries mode-scoped permission rules in its one `--settings` JSON, because Claude Code honors only the last `--settings` flag; verified on 2.1.286, `../../../../../docs/configuration.md` "Claude worker permissions" owns them, and `../../../../../docs/verification/runtime-backends.md` "Claude worker permission rules" holds the evidence and its refresh guard. |
+| Settings sources | A worker loads Claude Code's default user, project, and local settings, with the per-launch `--settings` JSON layered over them; firstmate passes no `--setting-sources`. |
 
 ## Workspace trust
 

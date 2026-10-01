@@ -9,7 +9,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | --- | --- |
 | Firstmate's code, private files, or project location | [FM_HOME](#fm_home) and [operational home layout](#operational-home-layout-and-state) |
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
-| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
+| Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [Claude worker permissions](#claude-worker-permissions-configclaude-worker-permissionsjson), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
 | Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
@@ -827,6 +827,53 @@ The file is a captain-wide safety preference, so it is inherited into secondmate
 
 The [Claude adapter reference](../.agents/skills/harness-adapters/references/harness/claude.md) records the verified shape of both launches and which once-per-machine dialog each one can meet.
 
+## Claude worker permissions (config/claude-worker-permissions.json)
+
+Every Claude task worker, ship or scout, launches with a narrow set of permission rules that `bin/fm-spawn.sh` builds for that task's kind, delivery mode, and branch.
+The rules ride the worker's own per-launch `--settings`, so they reach only the workers a spawn starts: never your own Claude sessions, a firstmate supervisor, or a secondmate, whose launch settings stay exactly the base controls.
+They apply under either [permission mode](#claude-permission-mode-configclaude-permission-mode), because a deny rule blocks in every mode and an allow rule only saves Claude's auto-mode classifier a pass.
+
+### What each worker gets
+
+[`bin/fm-claude-worker-permissions.json`](../bin/fm-claude-worker-permissions.json) holds the tracked rules, and [`bin/fm-claude-worker-permissions-lib.sh`](../bin/fm-claude-worker-permissions-lib.sh) composes them.
+
+| Worker | Allowed | Denied |
+| --- | --- | --- |
+| Ship, `no-mistakes` | `git commit`, `git rebase` onto the default branch, `git rebase --continue` and `--abort`, and `no-mistakes axi respond --action approve` | the shared deny set |
+| Ship, `direct-PR` | the commit and rebase allows, and a push of the task's own named branch | the shared deny set |
+| Ship, `local-only` | the commit and rebase allows | the shared deny set and every push |
+| Ship on a Gerrit forge | the commit and rebase allows, and the gate approval in `no-mistakes` mode | the shared deny set and every push |
+| Scout | nothing | the shared deny set and every push |
+
+The shared deny set blocks force, `+refspec`, delete, mirror, all, tags, prune, and no-verify pushes, any push to the default branch, a bare push or a push of `HEAD`, merges through git, gh, and gh-axi, `reset --hard`, `clean`, `branch -D` and `--force`, rebase `--exec` and `-x` or onto a local default branch, `commit --no-verify` and `--amend`, `--yes` on no-mistakes, and edits to Claude's user and local settings files.
+An allowed command skips Claude's auto-mode classifier, and the classifier allows a push to the default branch by default, so the deny set is what keeps a worker off the default branch.
+A ship record with no recorded delivery mode takes `no-mistakes`, the default `bin/fm-teardown.sh` applies to the same record, and any other unknown mode refuses the launch.
+
+### Limits
+
+A Bash rule matches command text, so it is not a security boundary.
+A form the rules do not match is decided as it would be without them, by the permission mode or the classifier, and is never allowed by them.
+Allows are exact commands, so they cannot widen to other arguments, and the own-branch push allows are built only when the branch name uses letters, digits, `.`, `_`, `-`, and `/`; any other branch loses them with a notice and leaves its pushes to the classifier.
+Deny shapes are anchored to the subcommand, so a commit message that mentions a force push is untouched, but a commit command that carries `--no-verify`, ` -n`, or `--amend` anywhere in its text is denied, including inside an inline `-m` message: write such a message with `-F` or a heredoc, whose body Claude does not match.
+Rules combine across settings levels and a deny rule beats an allow rule from another level, but a broader allow at the user or project level still allows whatever the per-launch denies do not match, so keep user-level allows for commands such as `no-mistakes axi respond` as narrow as the per-launch ones.
+The shared denies have no per-task override, so a task that needs a merge, `reset --hard`, `clean`, `branch -D`, or a rebase followed by a force push needs a person to run it, and a promoted scout keeps its scout rules until it is relaunched, because the rules are built at launch.
+The dated verification record, with what the shapes do not catch, is [Claude worker permission rules](verification/runtime-backends.md#claude-worker-permission-rules), and `tests/fm-claude-worker-permissions-live-e2e.test.sh` refreshes it.
+
+### Private perimeter
+
+The optional local, gitignored `config/claude-worker-permissions.json` adds a home's own deny rules to every Claude task worker's launch, for rules that name this machine's paths, tools, or services and so cannot be tracked.
+It is deny-only by construction and accepts exactly two keys:
+
+- `permissions.deny` is a list of Claude permission rules, appended after the tracked denies.
+- `autoMode.hard_deny` is a list of plain-language rules for Claude's auto-mode classifier, emitted after the built-in `"$defaults"` entry so the built-in rules stay in force; the literal `"$defaults"` is refused in the file.
+
+Any other key, including every `allow`, `ask`, `soft_deny`, and `environment` form, refuses the launch, so the file can narrow a worker and never widen it.
+A file that is unreadable, is not valid JSON, or holds a malformed or non-string rule refuses the spawn or relaunch before any endpoint, worktree, or task record exists, and the diagnostic names the file and the problem.
+Claude skips an invalid rule silently, so accepting one would start a worker without the perimeter the file declares.
+The spawn's check is a conservative syntax check of its own, not Claude's parser, so to see Claude's verdict copy the file's `permissions` into a scratch directory's `.claude/settings.local.json` and run `claude doctor` there, which lists every rule it skips.
+`bin/fm-spawn.sh` reads the file on every spawn and relaunch, so a change applies at the next launch.
+A secondmate's own launch ignores the file, a launch of another harness never reads it, and the file is inherited into secondmate homes under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract, so their own Claude task workers carry the same perimeter.
+
 ## Worker account pin (config/claude-account, config/pi-account)
 
 A home that mixes accounts for one runner, such as a work login and a personal one, can pin the account its own Claude and Pi workers launch on.
@@ -993,6 +1040,7 @@ This applies only to agents Firstmate launches; the captain's own primary Firstm
 
 Every claude launch's inline `--settings` JSON also carries `"attribution":{"commit":"","pr":"","sessionUrl":false}`, so a spawned worker never writes a Co-Authored-By trailer, Claude-Session link, or generated-with line into a commit or PR body regardless of which settings scopes end up loaded.
 That JSON also carries `"skillOverrides":{"auto-mode-setup":"off"}`, so a spawned worker is never offered Claude's `/auto-mode-setup`, whose wizard reads the project's recent session transcripts and sends them to a model.
+A task worker's copy of that JSON also carries its [permission rules](#claude-worker-permissions-configclaude-worker-permissionsjson).
 The steering doorbell is the second layer: it never types into a Claude pane that shows that dialog or whose screen it cannot read, and [Claude auto-mode setup dialog markers](verification/runtime-backends.md#claude-auto-mode-setup-dialog-markers) records the evidence and the drift guard that refreshes it.
 Every fleet launch, Claude included, also receives a pane-scoped `GIT_CONFIG` `core.hooksPath` pointing at `state/<id>.git-hooks`, so git's `commit-msg` hook strips known AI trailers at the commit object even when a runtime injects them after the typed message.
 `bin/fm-git-strip-ai-trailers.sh` owns the identities, the install, and chaining the hooks of whichever repository git is running in, so a project hook such as husky still runs.

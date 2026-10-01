@@ -71,7 +71,7 @@ FM_CLAUDE_WORKER_PRIVATE_PROBLEM_JQ='
 def rule_problem:
   if type != "string" then "is not a string"
   elif test("[\\x00-\\x1f\\x7f]") then "contains a control character"
-  elif (test("^[A-Za-z][A-Za-z0-9_*]*(\\(.+\\))?$") | not) then "is not a permission rule, a tool name optionally followed by (specifier)"
+  elif (test("^[A-Za-z][A-Za-z0-9_*-]*(\\(.+\\))?$") | not) then "is not a permission rule, a tool name optionally followed by (specifier)"
   elif startswith("mcp__") and contains("(") then "gives an MCP tool a specifier, which Claude refuses"
   else empty end;
 def prose_problem:

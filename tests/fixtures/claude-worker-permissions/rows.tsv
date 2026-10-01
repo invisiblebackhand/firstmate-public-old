@@ -13,7 +13,9 @@
 #           readonly no rule matches and Claude runs it as a built-in read-only command
 # via       both     the simulated matcher and the live guard both check the row
 #           live     only the live guard does: it needs Claude's wrapper, assignment,
-#                    or compound-command handling, which the simulation does not model
+#                    compound-command, or heredoc handling, which the simulation does not model
+# command   run verbatim in a scratch worktree on the example branch; a literal \n in the
+#           column stands for a newline, so a row can carry a heredoc
 #
 # Allows and the commit-message cases that must stay free.
 nm	allow	both	git commit --allow-empty -m t1
@@ -38,21 +40,31 @@ nm	none	both	git push origin fm/example-task
 nm	none	both	git tag probe-tag
 nm	none	both	git 'push' --force origin fm/example-task
 nm	none	both	git push --forc origin fm/example-task
-nm	none	both	GIT_DIR=/private/tmp/does-not-exist git commit --allow-empty -m x
-nm	none	both	cd /private/tmp && git commit --allow-empty -m outside
+# More forms the shapes do not catch. A command-text rule is not a boundary: the classifier or the permission mode decides these.
+nm	none	both	sh -c 'git push origin main'
+nm	none	both	git push origin fm/example-task:ma"in"
+nm	none	both	git -c alias.p=push p origin main
+nm	none	both	git push origin HEAD:refs/heads/ma*
+nm	none	both	GIT_DIR=/tmp/does-not-exist git commit --allow-empty -m x
+nm	none	both	cd /tmp && git commit --allow-empty -m outside
 # Commit flags are matched anywhere in a commit command, so a message that names one is denied: write it with -F or a heredoc.
 nm	deny	both	git commit --allow-empty --no-verify -m t2
 nm	deny	both	git commit --allow-empty -n -m t3
 nm	deny	both	git commit --amend --no-edit
 nm	deny	both	git commit --allow-empty -m "docs: explain push --force and --no-verify refusals"
 nm	deny	both	git -C . commit --amend --no-edit
+# A heredoc body is not part of the matched text: a message that names a flag is allowed through -F, a real flag is still denied.
+nm	allow	live	git commit --allow-empty -F - <<'EOF'\nfix: explain push --force, --no-verify and --amend\nEOF
+nm	deny	live	git commit --allow-empty --no-verify -F - <<'EOF'\nfix: plain message\nEOF
 # Rebase.
 nm	deny	both	git rebase origin/main main
 nm	deny	both	git rebase -x true origin/main
 nm	deny	both	git rebase --exec true origin/main
-# Pushes.
+# Pushes. A wildcard also matches nothing, so "git push main" and a bare "git push -f" are denied too.
 nm	deny	both	git push --force origin fm/example-task
 nm	deny	both	git push -f origin fm/example-task
+nm	deny	both	git push -f
+nm	deny	both	git push main
 nm	deny	both	git push origin fm/example-task --force-with-lease
 nm	deny	both	git push -fu origin fm/example-task
 nm	deny	both	git push origin +fm/example-task
@@ -97,6 +109,9 @@ nm	deny	both	no-mistakes axi run --yes
 nm	deny	live	time git push origin main
 nm	deny	live	timeout 30 git push --force origin x
 nm	deny	live	echo ok && git push origin main
+nm	deny	live	git commit --allow-empty -m x && git push origin main
+nm	deny	live	env git push origin main
+nm	deny	live	xargs git push origin main
 nm	deny	live	FOO=bar git merge main
 nm	deny	live	GIT_DIR=/nonexistent/.git git push --force origin x
 # direct-PR: the task's own branch, exactly, and nothing wider.

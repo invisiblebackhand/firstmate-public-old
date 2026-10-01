@@ -347,6 +347,7 @@ family_for_basename() {
     fm-bearings-board-lavish-live-e2e.test.sh|\
     fm-claude-automode-dialog-live-e2e.test.sh|\
     fm-claude-stop-autoarm-live-e2e.test.sh|\
+    fm-claude-worker-permissions-live-e2e.test.sh|\
     fm-cmux-claude-composer-live-e2e.test.sh|\
     fm-composer-matrix-live-e2e.test.sh|\
     fm-composer-codex-idle-live-e2e.test.sh|\
